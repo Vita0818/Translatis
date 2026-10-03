@@ -1,0 +1,588 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.intatis.local/knowledge/profile-0.1.schema.json",
+  "title": "Intatis OKF RAG Profile 0.1",
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))[A-Za-z0-9._~!$&'()+,;=@%/-]+$"
+    },
+    "backend": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "format_version",
+        "runtime_version"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "format_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "runtime_version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      }
+    },
+    "embeddingModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "revision",
+        "tokenizer_revision",
+        "runtime_binding_kind",
+        "runtime_binding_digest",
+        "dimensions",
+        "scalar_type",
+        "quantization",
+        "pooling",
+        "normalization",
+        "similarity",
+        "document_instruction",
+        "query_instruction",
+        "max_input_tokens",
+        "truncation"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "tokenizer_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runtime_binding_kind": {
+          "enum": [
+            "local",
+            "remote"
+          ]
+        },
+        "runtime_binding_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "dimensions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65536
+        },
+        "scalar_type": {
+          "enum": [
+            "float32"
+          ]
+        },
+        "quantization": {
+          "enum": [
+            "none"
+          ]
+        },
+        "pooling": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "normalization": {
+          "enum": [
+            "l2"
+          ]
+        },
+        "similarity": {
+          "enum": [
+            "cosine",
+            "dot",
+            "l2"
+          ]
+        },
+        "document_instruction": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "query_instruction": {
+          "type": "string",
+          "maxLength": 4096
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "truncation": {
+          "enum": [
+            "end",
+            "start",
+            "reject"
+          ]
+        }
+      }
+    },
+    "componentRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "component_revision"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._-]{1,128}$"
+        },
+        "component_revision": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "rerankerModel": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "revision",
+        "tokenizer_revision",
+        "runtime_binding_kind",
+        "runtime_binding_digest",
+        "template_digest",
+        "max_input_tokens",
+        "truncation",
+        "score_semantics"
+      ],
+      "properties": {
+        "identity": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "tokenizer_revision": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "runtime_binding_kind": {
+          "enum": [
+            "local",
+            "remote"
+          ]
+        },
+        "runtime_binding_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "template_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "max_input_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1048576
+        },
+        "truncation": {
+          "enum": [
+            "end",
+            "start",
+            "reject"
+          ]
+        },
+        "score_semantics": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    }
+  },
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "profile",
+    "profile_version",
+    "okf",
+    "bundle",
+    "normalization",
+    "chunking",
+    "embedding_indexes",
+    "lexical_indexes",
+    "retrieval",
+    "retrieval_snapshot",
+    "integrity"
+  ],
+  "properties": {
+    "schema": {
+      "const": "intatis-okf-rag-profile/0.1"
+    },
+    "profile": {
+      "const": "org.vita.intatis.okf-rag"
+    },
+    "profile_version": {
+      "const": "0.1"
+    },
+    "okf": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "spec_commit"
+      ],
+      "properties": {
+        "version": {
+          "const": "0.2"
+        },
+        "spec_commit": {
+          "const": "3fcbb9f828c2f23d109c855ee403c3a4c81f3a96"
+        }
+      }
+    },
+    "bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^kb_[A-Za-z0-9._-]{1,125}$"
+        },
+        "revision": {
+          "$ref": "#/$defs/digest"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "normalization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text_encoding",
+        "line_endings",
+        "unicode",
+        "version"
+      ],
+      "properties": {
+        "text_encoding": {
+          "const": "utf-8"
+        },
+        "line_endings": {
+          "const": "lf"
+        },
+        "unicode": {
+          "const": "nfc"
+        },
+        "version": {
+          "const": "intatis-text-normalization/1"
+        }
+      }
+    },
+    "chunking": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "manifest",
+        "algorithm",
+        "version",
+        "parameters_digest",
+        "manifest_digest"
+      ],
+      "properties": {
+        "manifest": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "algorithm": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "parameters_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "manifest_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "embedding_indexes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "component_revision",
+          "index_path",
+          "backend",
+          "model",
+          "chunk_manifest_digest",
+          "vector_count",
+          "index_digest"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "component_revision": {
+            "$ref": "#/$defs/digest"
+          },
+          "index_path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "backend": {
+            "$ref": "#/$defs/backend"
+          },
+          "model": {
+            "$ref": "#/$defs/embeddingModel"
+          },
+          "chunk_manifest_digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "vector_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "index_digest": {
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "lexical_indexes": {
+      "type": "array",
+      "maxItems": 8,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "component_revision",
+          "index_path",
+          "backend",
+          "tokenizer",
+          "language_policy",
+          "chunk_manifest_digest",
+          "document_count",
+          "index_digest"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,128}$"
+          },
+          "component_revision": {
+            "$ref": "#/$defs/digest"
+          },
+          "index_path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "backend": {
+            "$ref": "#/$defs/backend"
+          },
+          "tokenizer": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "language_policy": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256
+          },
+          "chunk_manifest_digest": {
+            "$ref": "#/$defs/digest"
+          },
+          "document_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000000
+          },
+          "index_digest": {
+            "$ref": "#/$defs/digest"
+          }
+        }
+      }
+    },
+    "retrieval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "dense",
+        "lexical",
+        "fusion",
+        "reranker",
+        "evidence_contract"
+      ],
+      "properties": {
+        "dense": {
+          "enum": [
+            "required"
+          ]
+        },
+        "lexical": {
+          "enum": [
+            "required",
+            "optional",
+            "disabled"
+          ]
+        },
+        "fusion": {
+          "enum": [
+            "rrf",
+            "dense_only"
+          ]
+        },
+        "reranker": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "mode"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                "required",
+                "optional",
+                "disabled"
+              ]
+            },
+            "model": {
+              "$ref": "#/$defs/rerankerModel"
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "const": "disabled"
+                  }
+                }
+              },
+              "then": {
+                "not": {
+                  "required": [
+                    "model"
+                  ]
+                }
+              }
+            },
+            {
+              "if": {
+                "properties": {
+                  "mode": {
+                    "enum": [
+                      "required",
+                      "optional"
+                    ]
+                  }
+                }
+              },
+              "then": {
+                "required": [
+                  "model"
+                ]
+              }
+            }
+          ]
+        },
+        "evidence_contract": {
+          "const": "intatis-evidence/1"
+        }
+      }
+    },
+    "retrieval_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "revision",
+        "bundle_revision",
+        "chunk_manifest_digest",
+        "dense",
+        "retrieval_policy_digest",
+        "reranker_binding_digest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^snap_[A-Za-z0-9._-]{1,128}$"
+        },
+        "revision": {
+          "$ref": "#/$defs/digest"
+        },
+        "bundle_revision": {
+          "$ref": "#/$defs/digest"
+        },
+        "chunk_manifest_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "dense": {
+          "$ref": "#/$defs/componentRef"
+        },
+        "lexical": {
+          "$ref": "#/$defs/componentRef"
+        },
+        "retrieval_policy_digest": {
+          "$ref": "#/$defs/digest"
+        },
+        "reranker_binding_digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "integrity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "algorithm",
+        "inventory"
+      ],
+      "properties": {
+        "algorithm": {
+          "const": "sha256"
+        },
+        "inventory": {
+          "$ref": "#/$defs/relativePath"
+        }
+      }
+    }
+  }
+}

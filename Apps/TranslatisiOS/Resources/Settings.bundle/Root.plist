@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>PreferenceSpecifiers</key>
+    <array>
+        <dict>
+            <key>Type</key>
+            <string>PSGroupSpecifier</string>
+            <key>Title</key>
+            <string>Message Rendering</string>
+            <key>FooterText</key>
+            <string>Rich Markdown uses the audited upstream renderer; images, math typesetting, and syntax highlighting are disabled for the first release. Plain text safe mode bypasses Markdown entirely. Use it before opening Translatis if a restored session cannot finish rendering.</string>
+        </dict>
+        <dict>
+            <key>Type</key>
+            <string>PSMultiValueSpecifier</string>
+            <key>Title</key>
+            <string>Message rendering</string>
+            <key>Key</key>
+            <string>intatis.messageRendering.mode.v1</string>
+            <key>DefaultValue</key>
+            <string>microsoft</string>
+            <key>Titles</key>
+            <array>
+                <string>Plain text safe mode</string>
+                <string>Rich Markdown</string>
+            </array>
+            <key>Values</key>
+            <array>
+                <string>plainSafe</string>
+                <string>microsoft</string>
+            </array>
+        </dict>
+    </array>
+    <key>StringsTable</key>
+    <string>Root</string>
+</dict>
+</plist>

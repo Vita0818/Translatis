@@ -1,0 +1,16 @@
+{
+  "name": "translatis-mcp-official-conformance",
+  "private": true,
+  "version": "1.0.0",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "verify": "node verify-pins.mjs",
+    "run": "./run-official.sh"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/conformance": "0.1.16"
+  }
+}

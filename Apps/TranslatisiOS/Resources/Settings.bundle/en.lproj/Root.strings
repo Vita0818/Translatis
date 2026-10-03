@@ -1,0 +1,5 @@
+"Message Rendering" = "Message Rendering";
+"Message rendering" = "Message rendering";
+"Plain text safe mode" = "Plain text safe mode";
+"Rich Markdown" = "Rich Markdown";
+"Rich Markdown uses the audited upstream renderer; images, math typesetting, and syntax highlighting are disabled for the first release. Plain text safe mode bypasses Markdown entirely. Use it before opening Translatis if a restored session cannot finish rendering." = "Rich Markdown uses the audited upstream renderer; images, math typesetting, and syntax highlighting are disabled for the first release. Plain text safe mode bypasses Markdown entirely. Use it before opening Translatis if a restored session cannot finish rendering.";

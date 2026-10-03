@@ -1,0 +1,5 @@
+"Message Rendering" = "消息渲染";
+"Message rendering" = "消息渲染";
+"Plain text safe mode" = "纯文本安全模式";
+"Rich Markdown" = "富文本 Markdown";
+"Rich Markdown uses the audited upstream renderer; images, math typesetting, and syntax highlighting are disabled for the first release. Plain text safe mode bypasses Markdown entirely. Use it before opening Translatis if a restored session cannot finish rendering." = "富文本 Markdown 使用经过审核的上游渲染器；首个版本暂不启用图像、数学公式排版和语法高亮。纯文本安全模式会完全绕过 Markdown。如果恢复的会话无法完成渲染，请在打开 Translatis 前先启用此模式。";

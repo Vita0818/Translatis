@@ -1,0 +1,22 @@
+# Direct Python compatibility pins for Intatis Document Runtime 2026.08.27.1.
+#
+# The architecture-specific, hash-locked transitive closures generated from
+# this file are the distribution authority. This input is intentionally small:
+# it declares the official document engines and the native numerical stack
+# versions whose ABI must remain fixed across both macOS runtime roots.
+docling==2.117.0
+docling-slim==2.117.0
+docling-core==2.89.0
+docling-parse==7.8.1
+python-docx==1.2.0
+python-pptx==1.0.2
+openpyxl==3.1.5
+lxml==6.1.1
+pypdfium2==5.12.1
+numpy==1.26.4
+torch==2.2.2
+torchvision==0.17.2
+# Transformers 5.8 requires PyTorch >=2.4 at runtime, while the last official
+# macOS x86_64 PyTorch line used by this dual-architecture closure is 2.2.2.
+# 4.57.6 is the newest 4.x release whose official metadata supports torch>=2.2.
+transformers==4.57.6

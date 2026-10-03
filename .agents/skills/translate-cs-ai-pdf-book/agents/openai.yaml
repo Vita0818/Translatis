@@ -1,0 +1,4 @@
+interface:
+  display_name: "Translate CS/AI PDF Book"
+  short_description: "Translate technical PDF books into verified Chinese editions"
+  default_prompt: "Use $translate-cs-ai-pdf-book to translate this CS/AI textbook PDF into a complete, searchable Simplified Chinese edition."

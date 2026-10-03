@@ -1,0 +1,215 @@
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+index 3cfeb6b..e56ae31 100644
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -94,7 +94,7 @@ use codex_terminal_detection::TerminalName;
+ #[derive(Debug, Parser)]
+ #[clap(
+     author,
+-    version = "0.145.0-intatis.2",
++    version = "0.145.0-intatis.3",
+     // If a sub‑command is given, ignore requirements of the default args.
+     subcommand_negates_reqs = true,
+     // The executable is sometimes invoked via a platform‑specific name like
+diff --git a/codex-rs/codex-api/src/common.rs b/codex-rs/codex-api/src/common.rs
+index bfd3e0c..dc75ac4 100644
+--- a/codex-rs/codex-api/src/common.rs
++++ b/codex-rs/codex-api/src/common.rs
+@@ -221,12 +221,14 @@ pub struct ResponsesApiRequest {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub tools: Option<Vec<serde_json::Value>>,
+     pub tool_choice: String,
+-    pub parallel_tool_calls: bool,
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub parallel_tool_calls: Option<bool>,
+     pub reasoning: Option<Reasoning>,
+     pub store: bool,
+     pub stream: bool,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub stream_options: Option<StreamOptions>,
++    #[serde(skip_serializing_if = "Vec::is_empty")]
+     pub include: Vec<String>,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub service_tier: Option<String>,
+@@ -250,7 +252,7 @@ impl<'a> From<&'a ResponsesApiRequest> for ResponseCreateWsRequest<'a> {
+             input: &request.input,
+             tools: request.tools.as_deref(),
+             tool_choice: &request.tool_choice,
+-            parallel_tool_calls: request.parallel_tool_calls,
++            parallel_tool_calls: request.parallel_tool_calls.unwrap_or(false),
+             reasoning: request.reasoning.as_ref(),
+             store: request.store,
+             stream: request.stream,
+diff --git a/codex-rs/codex-api/src/endpoint/responses_websocket.rs b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+index 62f12e6..89e1491 100644
+--- a/codex-rs/codex-api/src/endpoint/responses_websocket.rs
++++ b/codex-rs/codex-api/src/endpoint/responses_websocket.rs
+@@ -920,7 +920,7 @@ mod tests {
+                 "parameters": {"type": "object"}
+             })]),
+             tool_choice: "auto".to_string(),
+-            parallel_tool_calls: true,
++            parallel_tool_calls: Some(true),
+             reasoning: None,
+             store: false,
+             stream: true,
+diff --git a/codex-rs/codex-api/tests/clients.rs b/codex-rs/codex-api/tests/clients.rs
+index 0ff2d7a..956aac7 100644
+--- a/codex-rs/codex-api/tests/clients.rs
++++ b/codex-rs/codex-api/tests/clients.rs
+@@ -318,6 +318,6 @@ async fn responses_client_stream_request_preserves_item_ids() -> Result<()> {
+         tools: Some(Vec::new()),
+         tool_choice: "auto".into(),
+-        parallel_tool_calls: false,
++        parallel_tool_calls: Some(false),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -405,6 +405,6 @@ async fn streaming_client_retries_on_transport_error() -> Result<()> {
+         tools: Some(Vec::new()),
+         tool_choice: "auto".into(),
+-        parallel_tool_calls: false,
++        parallel_tool_calls: Some(false),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -525,6 +525,6 @@ async fn azure_store_sends_ids_and_headers() -> Result<()> {
+         tools: Some(Vec::new()),
+         tool_choice: "auto".into(),
+-        parallel_tool_calls: false,
++        parallel_tool_calls: Some(false),
+         reasoning: None,
+         store: true,
+         stream: true,
+diff --git a/codex-rs/core/src/client.rs b/codex-rs/core/src/client.rs
+index d8e5de0..bcf2897 100644
+--- a/codex-rs/core/src/client.rs
++++ b/codex-rs/core/src/client.rs
+@@ -592,7 +592,7 @@ impl ModelClient {
+             input: &input,
+             instructions: &instructions,
+             tools,
+-            parallel_tool_calls,
++            parallel_tool_calls: parallel_tool_calls.unwrap_or(false),
+             reasoning,
+             service_tier: service_tier.as_deref(),
+             prompt_cache_key: prompt_cache_key.as_deref(),
+@@ -847,6 +847,14 @@ impl ModelClient {
+         responses_metadata: &CodexResponsesMetadata,
+     ) -> Result<ResponsesApiRequest> {
+         let mut input = prompt.get_formatted_input_for_request(model_info.use_responses_lite);
++        // Presence of Intatis's validated OpenRouter provider body is the
++        // explicit adapter marker. It is never inferred from a URL or name.
++        let intatis_openrouter = self
++            .state
++            .provider
++            .info()
++            .intatis_responses_provider
++            .is_some();
+         let is_openai = self.state.provider.info().is_openai();
+         if !is_openai {
+             input
+@@ -875,14 +883,19 @@ impl ModelClient {
+         } else {
+             (prompt.base_instructions.text.clone(), Some(tools))
+         };
+-        let reasoning = Self::build_reasoning(model_info, effort, summary);
++        let mut reasoning = Self::build_reasoning(model_info, effort, summary);
++        if intatis_openrouter {
++            reasoning.summary = None;
++        }
+         let stream_options = (self.state.concurrent_reasoning_summaries_enabled
+             && is_openai
+             && reasoning.summary.is_some())
+         .then_some(StreamOptions {
+             reasoning_summary_delivery: codex_api::ReasoningSummaryDelivery::SequentialCutoff,
+         });
+-        let include = vec!["reasoning.encrypted_content".to_string()];
++        let include = (!intatis_openrouter)
++            .then(|| vec!["reasoning.encrypted_content".to_string()])
++            .unwrap_or_default();
+         let verbosity = if model_info.support_verbosity {
+             self.state.model_verbosity.or(model_info.default_verbosity)
+         } else {
+@@ -894,15 +907,17 @@ impl ModelClient {
+             &prompt.output_schema,
+             prompt.output_schema_strict,
+         );
+-        let prompt_cache_key = Some(self.prompt_cache_key(responses_metadata));
++        let prompt_cache_key =
++            (!intatis_openrouter).then(|| self.prompt_cache_key(responses_metadata));
+         let service_tier = model_info.service_tier_for_request(service_tier);
+         let request = ResponsesApiRequest {
+             model: model_info.slug.clone(),
+             instructions,
+             input,
+             tools,
+             tool_choice: "auto".to_string(),
+-            parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,
++            parallel_tool_calls: (!intatis_openrouter)
++                .then_some(prompt.parallel_tool_calls && !model_info.use_responses_lite),
+             reasoning: Some(reasoning),
+             store: provider.is_azure_responses_endpoint(),
+             stream: true,
+@@ -911,7 +926,7 @@ impl ModelClient {
+             prompt_cache_key,
+             text,
+             provider: intatis_responses_provider(self.state.provider.info()),
+-            client_metadata: Some(responses_metadata.client_metadata()),
++            client_metadata: (!intatis_openrouter).then(|| responses_metadata.client_metadata()),
+         };
+         Ok(request)
+     }
+diff --git a/codex-rs/core/src/client_common_tests.rs b/codex-rs/core/src/client_common_tests.rs
+index 8d6f290..cfb1434 100644
+--- a/codex-rs/core/src/client_common_tests.rs
++++ b/codex-rs/core/src/client_common_tests.rs
+@@ -112,6 +112,6 @@ fn serializes_text_verbosity_when_set() {
+         tools: Some(tools),
+         tool_choice: "auto".to_string(),
+-        parallel_tool_calls: true,
++        parallel_tool_calls: Some(true),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -160,6 +160,6 @@ fn serializes_text_schema_with_strict_format() {
+         tools: Some(tools),
+         tool_choice: "auto".to_string(),
+-        parallel_tool_calls: true,
++        parallel_tool_calls: Some(true),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -222,6 +222,6 @@ fn omits_text_when_not_set() {
+         tools: Some(tools),
+         tool_choice: "auto".to_string(),
+-        parallel_tool_calls: true,
++        parallel_tool_calls: Some(true),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -246,6 +246,6 @@ fn serializes_flex_service_tier_when_set() {
+         tools: Some(vec![]),
+         tool_choice: "auto".to_string(),
+-        parallel_tool_calls: true,
++        parallel_tool_calls: Some(true),
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -280,6 +280,6 @@ fn serializes_intatis_opaque_provider_object_without_field_loss() {
+         tools: Some(vec![]),
+         tool_choice: "auto".to_string(),
+-        parallel_tool_calls: true,
++        parallel_tool_calls: None,
+         reasoning: None,
+         store: false,
+         stream: true,
+@@ -295,4 +295,8 @@ fn serializes_intatis_opaque_provider_object_without_field_loss() {
+ 
+     let value = serde_json::to_value(&req).expect("json");
+     assert_eq!(value["provider"], provider);
++    assert!(value.get("parallel_tool_calls").is_none());
++    assert!(value.get("include").is_none());
++    assert!(value.get("prompt_cache_key").is_none());
++    assert!(value.get("client_metadata").is_none());
+ }

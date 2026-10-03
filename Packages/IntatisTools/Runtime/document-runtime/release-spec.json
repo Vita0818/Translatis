@@ -1,0 +1,193 @@
+{
+  "schema_version": 1,
+  "layout_version": 1,
+  "runtime_release": "2026.08.27.1",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "components": {
+    "python": "3.11.9",
+    "docling": "2.117.0",
+    "docling_slim": "2.117.0",
+    "docling_core": "2.89.0",
+    "docling_parse": "7.8.1",
+    "python_docx": "1.2.0",
+    "python_pptx": "1.0.2",
+    "openpyxl": "3.1.5",
+    "lxml": "6.1.1",
+    "pypdfium2": "5.12.1",
+    "numpy": "1.26.4",
+    "torch": "2.2.2",
+    "torchvision": "0.17.2",
+    "transformers": "4.57.6",
+    "tesseract": "5.5.3",
+    "tessdata_fast": "4.1.0",
+    "tectonic": "0.15.0",
+    "libreoffice": "26.8.0.0.beta1",
+    "leptonica": "1.87.0",
+    "libpng": "1.6.58",
+    "docling_layout_model": "docling-project/docling-layout-heron@8f39ad3c0b4c58e9c2d2c84a38465abf757272d8"
+  },
+  "build_tools": {
+    "uv": "0.12.3"
+  },
+  "component_artifacts": {
+    "tesseract": {
+      "arm64_binary_sha256": "adabf5c7323489760d1ae717198f227a872da21df13e0e41793c2dd8de0c1df5",
+      "x86_64_binary_sha256": "ddc3a20602fb9700b85446b37fbabed75243de56258ab14150070d29422b8c18",
+      "tesseract_license_sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "leptonica_license_sha256": "87829abb5bbb00b55a107365da89e9a33f86c4250169e5a1e5588505be7d5806",
+      "libpng_license_sha256": "bdb0a645ea18c60507d0368379b1ac5474b92255fcc2d115e07486a7672ba526"
+    }
+  },
+  "source_artifacts": {
+    "python_universal2_pkg": {
+      "url": "https://www.python.org/ftp/python/3.11.9/python-3.11.9-macos11.pkg",
+      "sha256": "b6cfdee2571ca56ee895043ca1e7110fb78a878cee3eb0c21accb2de34d24b55"
+    },
+    "tectonic_arm64": {
+      "url": "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-aarch64-apple-darwin.tar.gz",
+      "sha256": "24bd46566fa30d41101848405e9cbc4645edb92d8f857c9d21262174fb70cd33"
+    },
+    "tectonic_x86_64": {
+      "url": "https://github.com/tectonic-typesetting/tectonic/releases/download/tectonic%400.15.0/tectonic-0.15.0-x86_64-apple-darwin.tar.gz",
+      "sha256": "dd42576eaa4c0df58c243dd78b7b864d9deb405ffdfcdadd1b79a31faceab747"
+    },
+    "tectonic_source": {
+      "url": "https://github.com/tectonic-typesetting/tectonic/archive/refs/tags/tectonic%400.15.0.tar.gz",
+      "sha256": "3c13de312c4fe39ff905ad17e64a15a3a59d33ab65dacb0a8b9482c57e6bc6aa"
+    },
+    "tectonic_offline_cache": {
+      "origin": "generated from the fixed Tectonic 0.15.0 engine and the repository release corpus",
+      "sha256": "9b9bf59342a348a9f472fe54874d94d900fe4590898dbdd7c38d5778ddd18b41"
+    },
+    "tesseract_source": {
+      "url": "https://github.com/tesseract-ocr/tesseract/archive/refs/tags/5.5.3.tar.gz",
+      "sha256": "9218e62793116d42a9f6d14cd9348518b27f382096eea3d0f2d1a24616bb5884"
+    },
+    "leptonica_source": {
+      "url": "https://github.com/DanBloomberg/leptonica/releases/download/1.87.0/leptonica-1.87.0.tar.gz",
+      "sha256": "c73363397f96eb1295602bf44d708a994ad42046c791bf03ea0505d829bdb6a7"
+    },
+    "libpng_source": {
+      "url": "https://downloads.sourceforge.net/project/libpng/libpng16/1.6.58/libpng-1.6.58.tar.xz",
+      "sha256": "28eb403f51f0f7405249132cecfe82ea5c0ef97f1b32c5a65828814ae0d34775"
+    },
+    "numpy_arm64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/1a/2e/151484f49fd03944c4a3ad9c418ed193cfd02724e138ac8a9505d056c582/numpy-1.26.4-cp311-cp311-macosx_11_0_arm64.whl",
+      "filename": "numpy-1.26.4-cp311-cp311-macosx_11_0_arm64.whl",
+      "sha256": "edd8b5fe47dab091176d21bb6de568acdd906d1887a4584a15a9a96a1dca06ef"
+    },
+    "numpy_x86_64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/11/57/baae43d14fe163fa0e4c47f307b6b2511ab8d7d30177c491960504252053/numpy-1.26.4-cp311-cp311-macosx_10_9_x86_64.whl",
+      "filename": "numpy-1.26.4-cp311-cp311-macosx_10_9_x86_64.whl",
+      "sha256": "4c66707fabe114439db9068ee468c26bbdf909cac0fb58686a42a24de1760c71"
+    },
+    "scipy_arm64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/6d/ee/18146b7757ed4976276b9c9819108adbc73c5aad636e5353e20746b73069/scipy-1.17.1-cp311-cp311-macosx_14_0_arm64.whl",
+      "filename": "scipy-1.17.1-cp311-cp311-macosx_14_0_arm64.whl",
+      "sha256": "a3472cfbca0a54177d0faa68f697d8ba4c80bbdc19908c3465556d9f7efce9ee"
+    },
+    "scipy_x86_64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/ec/e6/cef1cf3557f0c54954198554a10016b6a03b2ec9e22a4e1df734936bd99c/scipy-1.17.1-cp311-cp311-macosx_14_0_x86_64.whl",
+      "filename": "scipy-1.17.1-cp311-cp311-macosx_14_0_x86_64.whl",
+      "sha256": "766e0dc5a616d026a3a1cffa379af959671729083882f50307e18175797b3dfd"
+    },
+    "opencv_python_arm64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/05/4d/53b30a2a3ac1f75f65a59eb29cf2ee7207ce64867db47036ad61743d5a23/opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_arm64.whl",
+      "filename": "opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_arm64.whl",
+      "sha256": "432f67c223f1dc2824f5e73cdfcd9db0efc8710647d4e813012195dc9122a52a"
+    },
+    "opencv_python_x86_64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/3b/84/0a67490741867eacdfa37bc18df96e08a9d579583b419010d7f3da8ff503/opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_x86_64.whl",
+      "filename": "opencv_python-4.11.0.86-cp37-abi3-macosx_13_0_x86_64.whl",
+      "sha256": "9d05ef13d23fe97f575153558653e2d6e87103995d54e6a35db3f282fe1f9c66"
+    },
+    "rapidocr_wheel": {
+      "url": "https://files.pythonhosted.org/packages/55/ed/0ee9b9281986974be9d2406ae0134c8d7c91d2fc613f16ffda9701eeda6f/rapidocr-3.9.2-py3-none-any.whl",
+      "filename": "rapidocr-3.9.2-py3-none-any.whl",
+      "sha256": "04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0"
+    },
+    "torch_arm64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/96/23/18b9c16c18a77755e7f15173821c7100f11e6b3b7717bea8d729bdeb92c0/torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
+      "filename": "torch-2.2.2-cp311-none-macosx_11_0_arm64.whl",
+      "sha256": "49aa4126ede714c5aeef7ae92969b4b0bbe67f19665106463c39f22e0a1860d1"
+    },
+    "torch_x86_64_wheel": {
+      "url": "https://files.pythonhosted.org/packages/3f/14/e105b8ef6d324e789c1589e95cb0ab63f3e07c2216d68b1178b7c21b7d2a/torch-2.2.2-cp311-none-macosx_10_9_x86_64.whl",
+      "filename": "torch-2.2.2-cp311-none-macosx_10_9_x86_64.whl",
+      "sha256": "95b9b44f3bcebd8b6cd8d37ec802048c872d9c567ba52c894bba90863a439059"
+    },
+    "transformers_wheel": {
+      "url": "https://files.pythonhosted.org/packages/03/b8/e484ef633af3887baeeb4b6ad12743363af7cce68ae51e938e00aaa0529d/transformers-4.57.6-py3-none-any.whl",
+      "filename": "transformers-4.57.6-py3-none-any.whl",
+      "sha256": "4c9e9de11333ddfe5114bc872c9f370509198acf0b87a832a0ab9458e2bd0550"
+    },
+    "docling_parse_sdist": {
+      "url": "https://files.pythonhosted.org/packages/90/94/33a91dfb849c1c2a645481cbd7b131c92ff6de17e0b01fe584177b1cb82b/docling_parse-7.8.1.tar.gz",
+      "sha256": "5bb5ff8e003b9d0a88da9bf1d1f9927c81677dc9dc20815c87ba6e117d1af661"
+    },
+    "docling_parse_x86_64_wheel": {
+      "origin": "built from docling_parse_sdist with CPython 3.11.9, CIBW_ARCHS=x86_64, MACOSX_DEPLOYMENT_TARGET=14.0, setuptools 82.0.0, wheel 0.46.3, pybind11 3.0.2, CMake 4.3.2, and Apple clang 21.0.0",
+      "filename": "docling_parse-7.8.1-cp311-cp311-macosx_14_0_x86_64.whl",
+      "sha256": "9dfc7bd6035949902b7e269fea3f7d6b2401708660d71fb2bcad0365a13ed8e6"
+    },
+    "docling_parse_x86_64_static_sources": {
+      "cxxopts": "44380e5a44706ab7347f400698c703eb2a196202",
+      "utfcpp": "b26a5f718f4f370af1852a0d5c6ae8fa031ba7d0",
+      "qpdf": "856d32c610334855d30e96d25eb5f9636fb62f08",
+      "libjpeg_turbo": "7723f50f3f66b9da74376e6d8badb6162464212c",
+      "freetype": "42608f77f20749dd6ddc9e0536788eaad70ea4b5",
+      "little_cms": "5176347635785e53ee5cee92328f76fda766ecc6",
+      "openjpeg": "210a8a5690d0da66f02d49420d7176a21ef409dc",
+      "loguru": "4adaa185883e3c04da25913579c451d3c32cfac1",
+      "blend2d": "6dbc2cefbc996379e07104e34519a440b49b15d7",
+      "asmjit": "a6e36cf7689189ebfad438880db4c0b1dade0d22",
+      "nlohmann_json_v3_12_0_archive_sha256": "4b92eb0c06d10683f7447ce9406cb97cd4b453be18d7279320f7b2f025c10187"
+    },
+    "libreoffice_arm64": {
+      "url": "https://downloadarchive.documentfoundation.org/libreoffice/old/26.8.0.0.beta1/mac/aarch64/LibreOfficeDev_26.8.0.0.beta1_MacOS_aarch64.dmg",
+      "sha256": "a56a5af102c78c294b3da48154958ecd9fa52d357589305c54e6e215ce611900"
+    },
+    "libreoffice_x86_64": {
+      "url": "https://downloadarchive.documentfoundation.org/libreoffice/old/26.8.0.0.beta1/mac/x86_64/LibreOfficeDev_26.8.0.0.beta1_MacOS_x86-64.dmg",
+      "sha256": "c0866a5fa5cd4f1b4ceced640026fa4e4b761aee4804440a18981a13ced35934"
+    },
+    "heron_config": {
+      "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/config.json",
+      "sha256": "fdea30805ce2f5666b147fca941dcdd27ad468e27d6ed21902207d3da056a97d"
+    },
+    "heron_model": {
+      "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/model.safetensors",
+      "sha256": "00333a43451945aaf89db8ca9c0a17e75d1537c17db60fdb91aa95f4c7929e0c"
+    },
+    "heron_preprocessor_config": {
+      "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/preprocessor_config.json",
+      "sha256": "cd38cd59999e7a95d68e487fbe5132df3d4e5c32a0836add57e6126ba0c4eaf1"
+    },
+    "heron_model_card": {
+      "url": "https://huggingface.co/docling-project/docling-layout-heron/resolve/8f39ad3c0b4c58e9c2d2c84a38465abf757272d8/README.md",
+      "sha256": "175700839bc7808eac6af1d0c23e4f483606ab2276fe01122f4093e61a1a65b6"
+    },
+    "tessdata_eng": {
+      "url": "https://github.com/tesseract-ocr/tessdata_fast/raw/4.1.0/eng.traineddata",
+      "sha256": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+    },
+    "tessdata_license": {
+      "url": "https://raw.githubusercontent.com/tesseract-ocr/tessdata_fast/4.1.0/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    }
+  },
+  "artifact_sha256": {
+    "docling_layout_model": {
+      "config_json": "fdea30805ce2f5666b147fca941dcdd27ad468e27d6ed21902207d3da056a97d",
+      "model_safetensors": "00333a43451945aaf89db8ca9c0a17e75d1537c17db60fdb91aa95f4c7929e0c",
+      "preprocessor_config_json": "cd38cd59999e7a95d68e487fbe5132df3d4e5c32a0836add57e6126ba0c4eaf1"
+    },
+    "tessdata": {
+      "eng": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2"
+    }
+  },
+  "maximum_resident_bytes": 2147483648
+}

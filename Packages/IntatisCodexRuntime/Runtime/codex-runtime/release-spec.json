@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "layout_version": 1,
+  "runtime_release": "2026.08.27.1",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "components": {
+    "codex_cli": "0.145.0-intatis.4",
+    "rust": "1.95.0",
+    "rusty_v8": "149.2.0"
+  },
+  "derivation_id": "0003-sha256:9cd57fc61366cb7410f6e551aa48ec762094e9a4edbfcbf0ae4670b7ba1f2285",
+  "upstream": {
+    "release": "rust-v0.145.0",
+    "commit": "25af12f7e61572b0bc18ddb1008be543b91519b0",
+    "archive_url": "https://github.com/openai/codex/archive/25af12f7e61572b0bc18ddb1008be543b91519b0.tar.gz",
+    "archive_sha256": "42f627a7b32db41582c73a8eafd9ec4b35d6c3ff81bd3d4455cfd6224d79d329",
+    "cargo_lock_sha256": "e0843448b5767ff36a2a3b15212feb480cd4eaafe8a0c0ca08547e3c7da03a05",
+    "rust_toolchain_file_sha256": "570656042681cfd8795403a455baf9a33035331a07db0645e866bbcea89a3d64"
+  },
+  "derived_cargo_lock_sha256": "aca116b64735186879a2108a154db4d9cbe39ff9430d91edd0d4d813b9d1ed5a",
+  "build_cargo_lock_sha256": "d4abbd8c97e61e878eadb8873fee0007a7b977b533e26e0293b86ab626d5a55e",
+  "rusty_v8": {
+    "release": "v149.2.0",
+    "arm64": {
+      "archive_url": "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/librusty_v8_release_aarch64-apple-darwin.a.gz",
+      "archive_sha256": "fabb2ec8d3ba5a6dea63db9a35a960dc5ca985eba32f342b9ba4aaa1c734b2fe"
+    },
+    "x86_64": {
+      "archive_url": "https://github.com/denoland/rusty_v8/releases/download/v149.2.0/librusty_v8_release_x86_64-apple-darwin.a.gz",
+      "archive_sha256": "794940a38a3f66b7ef52a5f003c6b094f743ad040a64afb3d3cd9fad49400f07"
+    }
+  },
+  "patch_sha256": {
+    "0001": "24b9d75efee98175df5a7a73dd2b17564776e09b710354c94fb267d2f5e29c14",
+    "0002": "b7756f0dbcdc671e851143312cd9fb3f8f490f195d99cca88cbfdac565bc5887",
+    "0003": "9cd57fc61366cb7410f6e551aa48ec762094e9a4edbfcbf0ae4670b7ba1f2285"
+  }
+}

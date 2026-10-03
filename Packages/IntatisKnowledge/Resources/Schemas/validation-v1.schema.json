@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.intatis.local/knowledge/validation-v1.schema.json",
+  "title": "Intatis host-owned knowledge validation receipt v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "store_id",
+    "snapshot_id",
+    "snapshot_revision",
+    "bundle_revision",
+    "profile_version",
+    "validator",
+    "backend_registry_digest",
+    "root_identity",
+    "content_seal_digest",
+    "semantic_verdict",
+    "diagnostics_digest",
+    "validated_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": "intatis-rag-validation/1"
+    },
+    "store_id": {
+      "type": "string",
+      "pattern": "^kb_[A-Za-z0-9._-]{1,125}$"
+    },
+    "snapshot_id": {
+      "type": "string",
+      "pattern": "^snap_[A-Za-z0-9._-]{1,128}$"
+    },
+    "snapshot_revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "bundle_revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "profile_version": {
+      "const": "0.1"
+    },
+    "validator": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "identity",
+        "version"
+      ],
+      "properties": {
+        "identity": {
+          "const": "org.vita.intatis.knowledge-validator"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      }
+    },
+    "backend_registry_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "root_identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "device_id",
+        "file_id",
+        "canonical_path_digest"
+      ],
+      "properties": {
+        "device_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "file_id": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "canonical_path_digest": {
+          "type": "string",
+          "pattern": "^sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "content_seal_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "semantic_verdict": {
+      "enum": [
+        "valid",
+        "valid_with_warnings",
+        "invalid"
+      ]
+    },
+    "diagnostics_digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "validated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    }
+  }
+}

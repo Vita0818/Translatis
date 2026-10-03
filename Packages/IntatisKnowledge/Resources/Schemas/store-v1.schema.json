@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.intatis.local/knowledge/store-v1.schema.json",
+  "title": "Intatis RAG store pointer v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "store_id",
+    "revision",
+    "current_snapshot",
+    "current_snapshot_revision"
+  ],
+  "properties": {
+    "schema": {
+      "const": "intatis-rag-store/1"
+    },
+    "store_id": {
+      "type": "string",
+      "pattern": "^kb_[A-Za-z0-9._-]{1,125}$"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "current_snapshot": {
+      "type": "string",
+      "pattern": "^snap_[A-Za-z0-9._-]{1,128}$"
+    },
+    "current_snapshot_revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    }
+  }
+}

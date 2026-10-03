@@ -1,0 +1,53 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.intatis.local/knowledge/source-locator-v1.schema.json",
+  "title": "Intatis immutable source locator v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "source_id",
+    "source_revision",
+    "adapter_identity",
+    "adapter_version",
+    "kind",
+    "value"
+  ],
+  "properties": {
+    "schema": {
+      "const": "intatis-source-locator/1"
+    },
+    "source_id": {
+      "type": "string",
+      "pattern": "^(?!(?i:(?:(?:sk-|rk-)[a-z0-9_-]{8,}|ghp_[a-z0-9_]{8,}|github_pat_[a-z0-9_]{8,}|xox[baprs]-[a-z0-9-]{8,}|(?:akia|asia)[a-z0-9]{8,}|aiza[a-z0-9_-]{8,}|eyj[a-z0-9_-]{8,}\\.[a-z0-9_-]{8,}(?:\\.[a-z0-9_-]{8,})?)$))[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$"
+    },
+    "source_revision": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "adapter_identity": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "adapter_version": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "kind": {
+      "enum": [
+        "utf8-byte-range",
+        "line-range",
+        "page",
+        "dom-path",
+        "layout-node"
+      ]
+    },
+    "value": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2048
+    }
+  }
+}

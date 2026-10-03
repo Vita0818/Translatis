@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "runnerVersion": "0.1.16",
+  "profiles": [
+    {
+      "profile": "codex-compat",
+      "protocolVersion": "2025-06-18",
+      "scenarios": [
+        "initialize",
+        "tools_call",
+        "auth/token-endpoint-auth-basic",
+        "auth/token-endpoint-auth-post",
+        "auth/token-endpoint-auth-none"
+      ]
+    },
+    {
+      "profile": "standard-extended",
+      "protocolVersion": "2025-11-25",
+      "scenarios": [
+        "initialize",
+        "tools_call",
+        "elicitation-sep1034-client-defaults",
+        "sse-retry",
+        "auth/metadata-default",
+        "auth/metadata-var1",
+        "auth/metadata-var2",
+        "auth/metadata-var3",
+        "auth/basic-cimd",
+        "auth/scope-from-www-authenticate",
+        "auth/scope-from-scopes-supported",
+        "auth/scope-omitted-when-undefined",
+        "auth/scope-step-up",
+        "auth/scope-retry-limit",
+        "auth/token-endpoint-auth-basic",
+        "auth/token-endpoint-auth-post",
+        "auth/token-endpoint-auth-none",
+        "auth/pre-registration"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,2303 @@
+diff --git a/codex-rs/app-server-protocol/src/protocol/common.rs b/codex-rs/app-server-protocol/src/protocol/common.rs
+index a4d87e2..de042c4 100644
+--- a/codex-rs/app-server-protocol/src/protocol/common.rs
++++ b/codex-rs/app-server-protocol/src/protocol/common.rs
+@@ -512,6 +512,13 @@ client_request_definitions! {
+         serialization: thread_id(params.thread_id),
+         response: v2::ThreadUnsubscribeResponse,
+     },
++    #[experimental("thread/subagent/message")]
++    /// Intatis control-plane delivery to a verified MultiAgentV2 descendant.
++    ThreadSubagentMessage => "thread/subagent/message" {
++        params: v2::ThreadSubagentMessageParams,
++        serialization: thread_id(params.thread_id),
++        response: v2::ThreadSubagentMessageResponse,
++    },
+     #[experimental("thread/increment_elicitation")]
+     /// Increment the thread-local out-of-band elicitation counter.
+     ///
+@@ -1840,6 +1847,26 @@ mod tests {
+         };
+         assert_eq!(
+             thread_fork.serialization_scope(),
++            Some(ClientRequestSerializationScope::Thread {
++                thread_id: thread_id.clone()
++            })
++        );
++
++        let subagent_message = ClientRequest::ThreadSubagentMessage {
++            request_id: request_id(),
++            params: v2::ThreadSubagentMessageParams {
++                thread_id: thread_id.clone(),
++                target_thread_id: "thread-child".to_string(),
++                message: "continue".to_string(),
++                trigger_turn: true,
++            },
++        };
++        assert_eq!(
++            subagent_message.method(),
++            "thread/subagent/message".to_string()
++        );
++        assert_eq!(
++            subagent_message.serialization_scope(),
+             Some(ClientRequestSerializationScope::Thread { thread_id })
+         );
+ 
+diff --git a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+index acebeb5..83bc174 100644
+--- a/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
++++ b/codex-rs/app-server-protocol/src/protocol/v2/thread.rs
+@@ -687,6 +687,28 @@ pub struct ThreadUnsubscribeResponse {
+     pub status: ThreadUnsubscribeStatus,
+ }
+ 
++/// Parameters for Intatis control-plane delivery to a verified MultiAgentV2 descendant.
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase", deny_unknown_fields)]
++#[ts(export_to = "v2/")]
++pub struct ThreadSubagentMessageParams {
++    /// Loaded MultiAgentV2 root that deterministically authors the message.
++    pub thread_id: String,
++    /// Exact descendant thread that receives the message.
++    pub target_thread_id: String,
++    /// Plain-text content delivered through the existing inter-agent mailbox.
++    pub message: String,
++    /// Whether an idle target should begin a new turn after delivery.
++    pub trigger_turn: bool,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, JsonSchema, TS)]
++#[serde(rename_all = "camelCase")]
++#[ts(export_to = "v2/")]
++pub struct ThreadSubagentMessageResponse {
++    pub submission_id: String,
++}
++
+ #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema, TS)]
+ #[serde(rename_all = "camelCase")]
+ #[ts(export_to = "v2/")]
+diff --git a/codex-rs/app-server/src/message_processor.rs b/codex-rs/app-server/src/message_processor.rs
+index 133c0c8..62bfc44 100644
+--- a/codex-rs/app-server/src/message_processor.rs
++++ b/codex-rs/app-server/src/message_processor.rs
+@@ -1086,6 +1086,9 @@ impl MessageProcessor {
+                     .thread_set_name(request_id.clone(), params)
+                     .await
+             }
++            ClientRequest::ThreadSubagentMessage { params, .. } => {
++                self.thread_processor.thread_subagent_message(params).await
++            }
+             ClientRequest::ThreadGoalSet { params, .. } => {
+                 self.thread_goal_processor
+                     .thread_goal_set(request_id.clone(), params)
+diff --git a/codex-rs/app-server/src/request_processors.rs b/codex-rs/app-server/src/request_processors.rs
+index a6d1794..0efb1e7 100644
+--- a/codex-rs/app-server/src/request_processors.rs
++++ b/codex-rs/app-server/src/request_processors.rs
+@@ -279,6 +279,8 @@ use codex_app_server_protocol::ThreadStartParams;
+ use codex_app_server_protocol::ThreadStartResponse;
+ use codex_app_server_protocol::ThreadStartedNotification;
+ use codex_app_server_protocol::ThreadStatus;
++use codex_app_server_protocol::ThreadSubagentMessageParams;
++use codex_app_server_protocol::ThreadSubagentMessageResponse;
+ use codex_app_server_protocol::ThreadTurnsListParams;
+ use codex_app_server_protocol::ThreadTurnsListResponse;
+ use codex_app_server_protocol::ThreadUnarchiveParams;
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor.rs b/codex-rs/app-server/src/request_processors/thread_processor.rs
+index 7f1a30a..8ba9304 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor.rs
+@@ -15,6 +15,25 @@ const CODEX_TUI_CLIENT_NAME: &str = "codex-tui";
+ const THREAD_ROLLBACK_DEPRECATION_SUMMARY: &str =
+     "thread/rollback is deprecated and will be removed soon";
+ 
++fn validate_subagent_message(message: &str) -> Result<(), JSONRPCErrorError> {
++    if message.trim().is_empty() {
++        return Err(invalid_params("message must not be empty"));
++    }
++    let actual_chars = message.chars().count();
++    if actual_chars > MAX_USER_INPUT_TEXT_CHARS {
++        let mut error = invalid_params(format!(
++            "message exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters"
++        ));
++        error.data = Some(serde_json::json!({
++            "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
++            "max_chars": MAX_USER_INPUT_TEXT_CHARS,
++            "actual_chars": actual_chars,
++        }));
++        return Err(error);
++    }
++    Ok(())
++}
++
+ struct ThreadListFilters {
+     model_providers: Option<Vec<String>>,
+     source_kinds: Option<Vec<ThreadSourceKind>>,
+@@ -480,6 +499,29 @@ impl ThreadRequestProcessor {
+             .map(|response| Some(response.into()))
+     }
+ 
++    pub(crate) async fn thread_subagent_message(
++        &self,
++        params: ThreadSubagentMessageParams,
++    ) -> Result<Option<ClientResponsePayload>, JSONRPCErrorError> {
++        validate_subagent_message(&params.message)?;
++        let root_thread_id = ThreadId::from_string(&params.thread_id)
++            .map_err(|err| invalid_params(format!("invalid threadId: {err}")))?;
++        let target_thread_id = ThreadId::from_string(&params.target_thread_id)
++            .map_err(|err| invalid_params(format!("invalid targetThreadId: {err}")))?;
++        let submission_id = self
++            .thread_manager
++            .send_subagent_message(
++                root_thread_id,
++                target_thread_id,
++                params.message,
++                params.trigger_turn,
++            )
++            .await
++            .map_err(|err| core_thread_write_error("send subagent message", err))?;
++
++        Ok(Some(ThreadSubagentMessageResponse { submission_id }.into()))
++    }
++
+     pub(crate) async fn thread_resume(
+         &self,
+         request_id: ConnectionRequestId,
+diff --git a/codex-rs/app-server/src/request_processors/thread_processor_tests.rs b/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
+index 38a94ab..659415c 100644
+--- a/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
++++ b/codex-rs/app-server/src/request_processors/thread_processor_tests.rs
+@@ -1,3 +1,32 @@
++mod subagent_message_validation_tests {
++    use super::super::validate_subagent_message;
++    use crate::error_code::INPUT_TOO_LARGE_ERROR_CODE;
++    use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
++    use pretty_assertions::assert_eq;
++    use serde_json::json;
++
++    #[test]
++    fn rejects_blank_and_reports_stable_oversize_details() {
++        let blank =
++            validate_subagent_message("  \n").expect_err("blank control-plane message should fail");
++        assert_eq!(blank.code, -32602);
++        assert_eq!(blank.data, None);
++
++        let actual_chars = MAX_USER_INPUT_TEXT_CHARS + 1;
++        let oversized = validate_subagent_message(&"界".repeat(actual_chars))
++            .expect_err("oversized control-plane message should fail");
++        assert_eq!(oversized.code, -32602);
++        assert_eq!(
++            oversized.data,
++            Some(json!({
++                "input_error_code": INPUT_TOO_LARGE_ERROR_CODE,
++                "max_chars": MAX_USER_INPUT_TEXT_CHARS,
++                "actual_chars": actual_chars,
++            }))
++        );
++    }
++}
++
+ mod thread_list_cwd_filter_tests {
+     use super::super::normalize_thread_list_cwd_filters;
+     use codex_app_server_protocol::ThreadListCwdFilter;
+@@ -678,6 +707,7 @@ mod thread_processor_behavior_tests {
+             aws: None,
+             wire_api: WireApi::Responses,
+             query_params: None,
++            intatis_responses_provider: None,
+             http_headers: None,
+             env_http_headers: None,
+             request_max_retries: None,
+diff --git a/codex-rs/app-server/tests/suite/v2/thread_list.rs b/codex-rs/app-server/tests/suite/v2/thread_list.rs
+index bfc076f..66a4efd 100644
+--- a/codex-rs/app-server/tests/suite/v2/thread_list.rs
++++ b/codex-rs/app-server/tests/suite/v2/thread_list.rs
+@@ -1044,8 +1044,10 @@ async fn thread_list_relation_filters_read_spawn_graph_from_state_db() -> Result
+         builder.cwd = codex_home.path().to_path_buf();
+         builder.cli_version = Some("0.0.0".to_string());
+         let mut metadata = builder.build(model_provider);
+-        metadata.preview = Some("child thread".to_string());
+-        metadata.first_user_message = metadata.preview.clone();
++        if thread_id != older_child_id {
++            metadata.preview = Some("child thread".to_string());
++            metadata.first_user_message = metadata.preview.clone();
++        }
+         state_db.upsert_thread(&metadata).await?;
+     }
+     for (parent_thread_id, child_thread_id) in [
+diff --git a/codex-rs/cli/src/main.rs b/codex-rs/cli/src/main.rs
+index 67cfb89..1990ef0 100644
+--- a/codex-rs/cli/src/main.rs
++++ b/codex-rs/cli/src/main.rs
+@@ -88,13 +88,18 @@ use codex_protocol::protocol::AskForApproval;
+ use codex_protocol::user_input::UserInput;
+ use codex_terminal_detection::TerminalName;
+ 
++const INTATIS_DERIVATION_ID: &str = match option_env!("INTATIS_CODEX_DERIVATION_ID") {
++    Some(value) => value,
++    None => "unidentified",
++};
++
+ /// Codex CLI
+ ///
+ /// If no subcommand is specified, options will be forwarded to the interactive CLI.
+ #[derive(Debug, Parser)]
+ #[clap(
+     author,
+-    version = "0.145.0-intatis.3",
++    version = "0.145.0-intatis.4",
+     // If a sub‑command is given, ignore requirements of the default args.
+     subcommand_negates_reqs = true,
+     // The executable is sometimes invoked via a platform‑specific name like
+@@ -104,6 +109,10 @@ use codex_terminal_detection::TerminalName;
+     override_usage = "codex [OPTIONS] [PROMPT]\n       codex [OPTIONS] <COMMAND> [ARGS]"
+ )]
+ struct MultitoolCli {
++    /// Print the compile-time Intatis patch derivation identity and exit.
++    #[arg(long, hide = true)]
++    intatis_derivation_id: bool,
++
+     #[clap(flatten)]
+     pub config_overrides: CliConfigOverrides,
+ 
+@@ -966,6 +975,7 @@ async fn cli_main(
+     remote_control_disabled: bool,
+ ) -> anyhow::Result<()> {
+     let MultitoolCli {
++        intatis_derivation_id,
+         config_overrides: mut root_config_overrides,
+         feature_toggles,
+         remote,
+@@ -973,6 +983,11 @@ async fn cli_main(
+         subcommand,
+     } = MultitoolCli::parse();
+ 
++    if intatis_derivation_id {
++        println!("{INTATIS_DERIVATION_ID}");
++        return Ok(());
++    }
++
+     // Fold --enable/--disable into config overrides so they flow to all subcommands.
+     let toggle_overrides = feature_toggles.to_overrides()?;
+     root_config_overrides.raw_overrides.extend(toggle_overrides);
+@@ -2501,6 +2516,15 @@ mod tests {
+     use codex_tui::TokenUsage;
+     use pretty_assertions::assert_eq;
+ 
++    #[test]
++    fn intatis_derivation_identity_flag_parses_without_a_subcommand() {
++        let cli = MultitoolCli::try_parse_from(["codex", "--intatis-derivation-id"])
++            .expect("hidden derivation identity flag should parse");
++
++        assert!(cli.intatis_derivation_id);
++        assert!(cli.subcommand.is_none());
++    }
++
+     #[test]
+     fn exec_server_remote_auth_accepts_api_key_auth() {
+         let auth = CodexAuth::from_api_key("sk-test");
+@@ -2561,6 +2585,7 @@ mod tests {
+     fn finalize_resume_from_args(args: &[&str]) -> TuiCli {
+         let cli = MultitoolCli::try_parse_from(args).expect("parse");
+         let MultitoolCli {
++            intatis_derivation_id: _,
+             interactive,
+             config_overrides: root_overrides,
+             subcommand,
+@@ -2595,6 +2620,7 @@ mod tests {
+     fn finalize_fork_from_args(args: &[&str]) -> TuiCli {
+         let cli = MultitoolCli::try_parse_from(args).expect("parse");
+         let MultitoolCli {
++            intatis_derivation_id: _,
+             interactive,
+             config_overrides: root_overrides,
+             subcommand,
+@@ -2620,6 +2646,7 @@ mod tests {
+     fn finalize_archive_from_args(args: &[&str]) -> (String, TuiCli, InteractiveRemoteOptions) {
+         let cli = MultitoolCli::try_parse_from(args).expect("parse");
+         let MultitoolCli {
++            intatis_derivation_id: _,
+             interactive,
+             config_overrides: root_overrides,
+             subcommand,
+diff --git a/codex-rs/core/src/agent/control.rs b/codex-rs/core/src/agent/control.rs
+index 749c3f3..2646fca 100644
+--- a/codex-rs/core/src/agent/control.rs
++++ b/codex-rs/core/src/agent/control.rs
+@@ -21,6 +21,7 @@ use crate::thread_rollout_truncation::truncate_rollout_to_last_n_fork_turns;
+ use codex_protocol::AgentPath;
+ use codex_protocol::SessionId;
+ use codex_protocol::ThreadId;
++use codex_protocol::dynamic_tools::DynamicToolSpec;
+ use codex_protocol::error::CodexErr;
+ use codex_protocol::error::Result as CodexResult;
+ use codex_protocol::models::ContentItem;
+@@ -70,6 +71,8 @@ pub(crate) struct SpawnAgentOptions {
+     pub(crate) fork_mode: Option<SpawnAgentForkMode>,
+     pub(crate) parent_thread_id: Option<ThreadId>,
+     pub(crate) environments: Option<Vec<TurnEnvironmentSelection>>,
++    /// Request-owned App Server tools inherited by MultiAgentV2 children in every fork mode.
++    pub(crate) dynamic_tools: Option<Vec<DynamicToolSpec>>,
+ }
+ 
+ #[derive(Clone, Debug)]
+diff --git a/codex-rs/core/src/agent/control/residency_tests.rs b/codex-rs/core/src/agent/control/residency_tests.rs
+index 7efd82e..1288f1a 100644
+--- a/codex-rs/core/src/agent/control/residency_tests.rs
++++ b/codex-rs/core/src/agent/control/residency_tests.rs
+@@ -146,6 +146,7 @@ async fn spawn_v2_subagent(
+             /*inherited_environments*/ None,
+             /*inherited_exec_policy*/ None,
+             /*environments*/ None,
++            Vec::new(),
+         )
+         .await
+         .expect("spawn v2 subagent")
+diff --git a/codex-rs/core/src/agent/control/spawn.rs b/codex-rs/core/src/agent/control/spawn.rs
+index 391058b..ac3ca75 100644
+--- a/codex-rs/core/src/agent/control/spawn.rs
++++ b/codex-rs/core/src/agent/control/spawn.rs
+@@ -2,6 +2,7 @@ use super::residency::is_v2_resident_session_source;
+ use super::*;
+ use crate::agent::role::apply_role_to_config;
+ use crate::config::PermissionProfileSnapshot;
++use crate::config::apply_intatis_agent_workspace_preset;
+ use codex_extension_api::ExtensionDataInit;
+ 
+ const AGENT_NAMES: &str = include_str!("../agent_names.txt");
+@@ -288,6 +289,12 @@ impl AgentControl {
+             let runtime_approval_policy = config.permissions.approval_policy.value();
+             let runtime_approvals_reviewer = config.approvals_reviewer;
+             let runtime_cwd = config.cwd.clone();
++            let runtime_workspace_roots = config.workspace_roots.clone();
++            let workspace_preset = config
++                .multi_agent_v2
++                .intatis_agent_workspaces
++                .get(&role_name)
++                .cloned();
+             let runtime_permission_profile = match config.permissions.active_permission_profile() {
+                 Some(active_permission_profile) => {
+                     PermissionProfileSnapshot::active_with_profile_workspace_roots(
+@@ -313,12 +320,25 @@ impl AgentControl {
+                 })?;
+             config.approvals_reviewer = runtime_approvals_reviewer;
+             config.cwd = runtime_cwd;
++            config.workspace_roots = runtime_workspace_roots.clone();
++            config
++                .permissions
++                .set_workspace_roots(runtime_workspace_roots.clone());
+             config
+                 .permissions
+                 .set_permission_profile_from_session_snapshot(runtime_permission_profile)
+                 .map_err(|err| {
+                     CodexErr::InvalidRequest(format!("permission_profile is invalid: {err}"))
+                 })?;
++            if let Some(workspace_preset) = workspace_preset {
++                apply_intatis_agent_workspace_preset(
++                    &mut config,
++                    &role_name,
++                    &workspace_preset,
++                    &runtime_workspace_roots,
++                )
++                .map_err(CodexErr::InvalidRequest)?;
++            }
+         }
+         let residency_slot = self
+             .reserve_v2_residency_slot(&state, &config, Some(thread_id))
+@@ -469,6 +489,7 @@ impl AgentControl {
+                     inheritance.environments,
+                     inheritance.exec_policy,
+                     options.environments.clone(),
++                    options.dynamic_tools.clone().unwrap_or_default(),
+                 ))
+                 .await?
+             }
+@@ -729,6 +750,7 @@ impl AgentControl {
+                 inherited_environments,
+                 inherited_exec_policy,
+                 options.environments.clone(),
++                options.dynamic_tools.clone().unwrap_or_default(),
+                 thread_extension_init,
+             )
+             .await
+diff --git a/codex-rs/core/src/agent/control_tests.rs b/codex-rs/core/src/agent/control_tests.rs
+index 6d4cbc7..7e6b8e0 100644
+--- a/codex-rs/core/src/agent/control_tests.rs
++++ b/codex-rs/core/src/agent/control_tests.rs
+@@ -3,11 +3,14 @@ use crate::CodexThread;
+ use crate::StateDbHandle;
+ use crate::ThreadManager;
+ use crate::agent::agent_status_from_event;
++use crate::agent::role::apply_role_to_config;
+ use crate::agent_communication::AgentCommunicationContext;
+ use crate::agent_communication::AgentCommunicationKind;
+ use crate::config::AgentRoleConfig;
+ use crate::config::Config;
+ use crate::config::ConfigBuilder;
++use crate::config::ConfigOverrides;
++use crate::config::apply_intatis_agent_workspace_preset;
+ use crate::context::ContextualUserFragment;
+ use crate::context::SubagentNotification;
+ use crate::init_state_db;
+@@ -55,6 +58,7 @@ use codex_thread_store::InMemoryThreadStore;
+ use codex_thread_store::LocalThreadStore;
+ use codex_thread_store::LocalThreadStoreConfig;
+ use codex_thread_store::ThreadStore;
++use codex_utils_absolute_path::AbsolutePathBuf;
+ use codex_utils_path_uri::PathUri;
+ use pretty_assertions::assert_eq;
+ use tempfile::TempDir;
+@@ -742,6 +746,281 @@ async fn ensure_v2_agent_loaded_reloads_registered_unloaded_agent() {
+     assert_eq!(captured, Some(expected));
+ }
+ 
++#[test]
++fn control_plane_message_requires_exact_root_ancestry_and_preserves_child_profile_on_reload() {
++    const TEST_STACK_SIZE_BYTES: usize = 32 * 1024 * 1024;
++    std::thread::Builder::new()
++        .name("control-plane-message-test".to_string())
++        .stack_size(TEST_STACK_SIZE_BYTES)
++        .spawn(|| {
++            let runtime = tokio::runtime::Builder::new_multi_thread()
++                .worker_threads(2)
++                .thread_stack_size(TEST_STACK_SIZE_BYTES)
++                .enable_all()
++                .build()
++                .expect("build control-plane test runtime");
++            runtime.block_on(Box::pin(control_plane_message_test_inner()));
++        })
++        .expect("spawn control-plane test thread")
++        .join()
++        .expect("control-plane test thread should not panic");
++}
++
++async fn control_plane_message_test_inner() {
++    let home = TempDir::new().expect("create codex home");
++    let workspace = home.path().join("workspace");
++    let child_cwd_path = workspace.join("worker");
++    std::fs::create_dir_all(&child_cwd_path).expect("create child workspace");
++    let workspace_root = AbsolutePathBuf::from_absolute_path_checked(&workspace)
++        .expect("workspace should be absolute");
++    let role_dir = home.path().join("agents");
++    std::fs::create_dir_all(&role_dir).expect("create role dir");
++    std::fs::write(
++        role_dir.join("worker.toml"),
++        "model = \"gpt-5.4\"\nmodel_provider = \"ollama\"\nmodel_reasoning_effort = \"minimal\"\n",
++    )
++    .expect("write role config");
++    std::fs::write(
++        home.path().join("config.toml"),
++        format!(
++            r#"model = "gpt-5.5"
++model_provider = "openai"
++
++[features.multi_agent_v2]
++enabled = true
++
++[features.multi_agent_v2.intatis_agent_workspaces.worker]
++cwd = {child_cwd:?}
++workspace_roots = [{workspace_root:?}]
++description = "Writable worker project"
++sandbox = "workspace-write"
++
++[agents.worker]
++description = "Worker role"
++config_file = "./agents/worker.toml"
++"#,
++            child_cwd = child_cwd_path.display().to_string(),
++            workspace_root = workspace.display().to_string(),
++        ),
++    )
++    .expect("write config");
++    let mut config = ConfigBuilder::without_managed_config_for_tests()
++        .codex_home(home.path().to_path_buf())
++        .fallback_cwd(Some(workspace.clone()))
++        .harness_overrides(ConfigOverrides {
++            workspace_roots: Some(vec![workspace_root.clone()]),
++            ..Default::default()
++        })
++        .build()
++        .await
++        .expect("load control-plane test config");
++    config
++        .features
++        .enable(Feature::Sqlite)
++        .expect("enable sqlite for spawn graph persistence");
++    let harness = AgentControlHarness::new_with_config(home, config.clone()).await;
++
++    let (root_thread_id, root_thread) = harness.start_thread().await;
++    root_thread.session.new_default_turn().await;
++    let root_control = root_thread.session.services.agent_control.clone();
++    let mut child_config = config.clone();
++    apply_role_to_config(&mut child_config, Some("worker"))
++        .await
++        .expect("apply worker role");
++    let worker_preset = config.multi_agent_v2.intatis_agent_workspaces["worker"].clone();
++    apply_intatis_agent_workspace_preset(
++        &mut child_config,
++        "worker",
++        &worker_preset,
++        std::slice::from_ref(&workspace_root),
++    )
++    .expect("apply worker workspace preset");
++    let expected_child_provider = child_config.model_provider.clone();
++    let child_path = AgentPath::try_from("/root/worker").expect("child path");
++    let child = root_control
++        .spawn_agent_with_metadata(
++            child_config,
++            text_input("initial child work"),
++            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++                parent_thread_id: root_thread_id,
++                depth: 1,
++                agent_path: Some(child_path.clone()),
++                agent_nickname: None,
++                agent_role: Some("worker".to_string()),
++            })),
++            SpawnAgentOptions {
++                parent_thread_id: Some(root_thread_id),
++                ..Default::default()
++            },
++        )
++        .await
++        .expect("spawn worker child");
++    let child_thread_id = child.thread_id;
++
++    let submission_id = harness
++        .manager
++        .send_subagent_message(
++            root_thread_id,
++            child_thread_id,
++            "control-plane note".to_string(),
++            /*trigger_turn*/ false,
++        )
++        .await
++        .expect("verified child should accept control-plane message");
++    assert!(!submission_id.is_empty());
++    assert!(
++        harness
++            .manager
++            .captured_ops()
++            .iter()
++            .any(|(thread_id, op)| {
++                *thread_id == child_thread_id
++                    && matches!(
++                        op,
++                        Op::InterAgentCommunication { communication }
++                            if communication.author == AgentPath::root()
++                                && communication.recipient == child_path
++                                && communication.content == "control-plane note"
++                                && communication.encrypted_content.is_none()
++                                && !communication.trigger_turn
++                    )
++            })
++    );
++    harness
++        .manager
++        .send_subagent_message(
++            root_thread_id,
++            child_thread_id,
++            "start follow-up".to_string(),
++            /*trigger_turn*/ true,
++        )
++        .await
++        .expect("verified child should accept a triggering control-plane message");
++    assert!(
++        harness
++            .manager
++            .captured_ops()
++            .iter()
++            .any(|(thread_id, op)| {
++                *thread_id == child_thread_id
++                    && matches!(
++                        op,
++                        Op::InterAgentCommunication { communication }
++                            if communication.author == AgentPath::root()
++                                && communication.recipient == child_path
++                                && communication.content == "start follow-up"
++                                && communication.encrypted_content.is_none()
++                                && communication.trigger_turn
++                    )
++            })
++    );
++
++    let root_target_error = harness
++        .manager
++        .send_subagent_message(
++            root_thread_id,
++            root_thread_id,
++            "not allowed".to_string(),
++            false,
++        )
++        .await
++        .expect_err("root cannot be a subagent target");
++    assert_matches!(root_target_error, CodexErr::InvalidRequest(_));
++
++    let (other_root_id, other_root) = harness.start_thread().await;
++    other_root.session.new_default_turn().await;
++    let other_control = other_root.session.services.agent_control.clone();
++    let foreign_path = AgentPath::try_from("/root/foreign").expect("foreign child path");
++    let foreign = other_control
++        .spawn_agent_with_metadata(
++            config.clone(),
++            text_input("foreign work"),
++            Some(SessionSource::SubAgent(SubAgentSource::ThreadSpawn {
++                parent_thread_id: other_root_id,
++                depth: 1,
++                agent_path: Some(foreign_path),
++                agent_nickname: None,
++                agent_role: None,
++            })),
++            SpawnAgentOptions {
++                parent_thread_id: Some(other_root_id),
++                ..Default::default()
++            },
++        )
++        .await
++        .expect("spawn foreign child");
++    let unrelated_error = harness
++        .manager
++        .send_subagent_message(
++            root_thread_id,
++            foreign.thread_id,
++            "wrong tree".to_string(),
++            false,
++        )
++        .await
++        .expect_err("another root's child must be rejected");
++    assert_matches!(unrelated_error, CodexErr::InvalidRequest(_));
++    let child_as_root_error = harness
++        .manager
++        .send_subagent_message(
++            child_thread_id,
++            foreign.thread_id,
++            "child cannot author as root".to_string(),
++            false,
++        )
++        .await
++        .expect_err("child cannot impersonate root");
++    assert_matches!(child_as_root_error, CodexErr::InvalidRequest(_));
++
++    let child_thread = harness
++        .manager
++        .get_thread(child_thread_id)
++        .await
++        .expect("child should be loaded");
++    persist_thread_for_tree_resume(&child_thread, "persist before control-plane reload").await;
++    child_thread
++        .shutdown_and_wait()
++        .await
++        .expect("child shutdown should succeed");
++    assert!(
++        harness
++            .manager
++            .remove_thread(&child_thread_id)
++            .await
++            .is_some()
++    );
++    harness
++        .manager
++        .send_subagent_message(
++            root_thread_id,
++            child_thread_id,
++            "reload child profile".to_string(),
++            false,
++        )
++        .await
++        .expect("control-plane message should reload known child");
++    let reloaded = harness
++        .manager
++        .get_thread(child_thread_id)
++        .await
++        .expect("child should reload");
++    let snapshot = reloaded.config_snapshot().await;
++    let reloaded_config = reloaded.session.get_config().await;
++    assert_eq!(snapshot.model, "gpt-5.4");
++    assert_eq!(snapshot.model_provider_id, "ollama");
++    assert_eq!(reloaded_config.model_provider, expected_child_provider);
++    assert_eq!(
++        snapshot.reasoning_effort,
++        Some(codex_protocol::openai_models::ReasoningEffort::Minimal)
++    );
++    assert_eq!(snapshot.cwd().as_path(), child_cwd_path.as_path());
++    assert_eq!(snapshot.workspace_roots, vec![workspace_root]);
++    assert!(matches!(
++        snapshot.sandbox_policy(),
++        codex_protocol::protocol::SandboxPolicy::WorkspaceWrite { .. }
++    ));
++}
++
+ #[tokio::test]
+ async fn resume_agent_from_rollout_does_not_reopen_v2_descendants() {
+     let (home, mut config) = test_config().await;
+diff --git a/codex-rs/core/src/agent_communication.rs b/codex-rs/core/src/agent_communication.rs
+index e71f50a..337ed2a 100644
+--- a/codex-rs/core/src/agent_communication.rs
++++ b/codex-rs/core/src/agent_communication.rs
+@@ -9,6 +9,8 @@ pub(crate) enum AgentCommunicationKind {
+     Message,
+     Followup,
+     Result,
++    ControlPlaneMessage,
++    ControlPlaneFollowup,
+ }
+ 
+ impl AgentCommunicationKind {
+@@ -18,8 +20,14 @@ impl AgentCommunicationKind {
+             Self::Message => "message",
+             Self::Followup => "followup",
+             Self::Result => "result",
++            Self::ControlPlaneMessage => "control_plane_message",
++            Self::ControlPlaneFollowup => "control_plane_followup",
+         }
+     }
++
++    fn redact_content(self) -> bool {
++        matches!(self, Self::ControlPlaneMessage | Self::ControlPlaneFollowup)
++    }
+ }
+ 
+ #[derive(Clone, Debug, PartialEq, Eq)]
+@@ -56,7 +64,9 @@ pub(crate) fn emit_agent_communication_send(
+             state = "send",
+             sender_thread_id = %context.sender_thread_id,
+             receiver_thread_id = %receiver_thread_id,
+-            content = if communication.content.is_empty() {
++            content = if context.kind.redact_content() {
++                "[redacted]"
++            } else if communication.content.is_empty() {
+                 communication.encrypted_content.as_deref().unwrap_or_default()
+             } else {
+                 communication.content.as_str()
+diff --git a/codex-rs/core/src/config/config_tests.rs b/codex-rs/core/src/config/config_tests.rs
+index a52838b..6b9a4d3 100644
+--- a/codex-rs/core/src/config/config_tests.rs
++++ b/codex-rs/core/src/config/config_tests.rs
+@@ -10548,6 +10548,7 @@ root_agent_usage_hint_text = "Root guidance."
+ subagent_usage_hint_text = "Subagent guidance."
+ multi_agent_mode_hint_text = "Custom mode guidance."
+ tool_namespace = "agents"
++flat_tools = true
+ hide_spawn_agent_metadata = true
+ expose_spawn_agent_model_overrides = false
+ non_code_mode_only = true
+@@ -10595,6 +10596,7 @@ max_concurrent_threads_per_session = 9
+         config.multi_agent_v2.tool_namespace.as_deref(),
+         Some("agents")
+     );
++    assert!(config.multi_agent_v2.flat_tools);
+     assert!(config.multi_agent_v2.hide_spawn_agent_metadata);
+     assert!(!config.multi_agent_v2.expose_spawn_agent_model_overrides);
+     assert!(config.multi_agent_v2.non_code_mode_only);
+@@ -10602,6 +10604,69 @@ max_concurrent_threads_per_session = 9
+     Ok(())
+ }
+ 
++#[tokio::test]
++async fn multi_agent_v2_intatis_workspace_presets_are_strict_and_absolute() -> std::io::Result<()> {
++    let codex_home = TempDir::new()?;
++    let workspace = codex_home.path().join("workspace");
++    std::fs::create_dir_all(&workspace)?;
++    std::fs::write(
++        codex_home.path().join(CONFIG_TOML_FILE),
++        format!(
++            r#"[features.multi_agent_v2]
++enabled = true
++
++[features.multi_agent_v2.intatis_agent_workspaces.reader]
++cwd = {cwd:?}
++workspace_roots = [{root:?}]
++description = "Read-only approved project"
++sandbox = "read-only"
++"#,
++            cwd = workspace.display().to_string(),
++            root = workspace.display().to_string(),
++        ),
++    )?;
++    let config = ConfigBuilder::without_managed_config_for_tests()
++        .codex_home(codex_home.path().to_path_buf())
++        .fallback_cwd(Some(codex_home.path().to_path_buf()))
++        .build()
++        .await?;
++    let reader = config
++        .multi_agent_v2
++        .intatis_agent_workspaces
++        .get("reader")
++        .expect("reader preset should load");
++    assert_eq!(reader.cwd, workspace);
++    assert_eq!(reader.workspace_roots, vec![workspace]);
++    assert_eq!(reader.sandbox, IntatisAgentWorkspaceSandbox::ReadOnly);
++
++    let invalid_home = TempDir::new()?;
++    std::fs::write(
++        invalid_home.path().join(CONFIG_TOML_FILE),
++        r#"[features.multi_agent_v2]
++enabled = true
++
++[features.multi_agent_v2.intatis_agent_workspaces.reader]
++cwd = "relative/cwd"
++workspace_roots = ["relative/root"]
++description = "Read-only approved project"
++sandbox = "read-only"
++"#,
++    )?;
++    let err = ConfigBuilder::without_managed_config_for_tests()
++        .codex_home(invalid_home.path().to_path_buf())
++        .fallback_cwd(Some(invalid_home.path().to_path_buf()))
++        .build()
++        .await
++        .expect_err("relative preset paths must fail closed");
++    assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
++    assert!(
++        err.to_string()
++            .contains("cwd must be an absolute normalized path")
++    );
++
++    Ok(())
++}
++
+ #[tokio::test]
+ async fn multi_agent_v2_default_session_thread_cap_counts_root() -> std::io::Result<()> {
+     let codex_home = TempDir::new()?;
+diff --git a/codex-rs/core/src/config/mod.rs b/codex-rs/core/src/config/mod.rs
+index 1fe1b80..7bebee8 100644
+--- a/codex-rs/core/src/config/mod.rs
++++ b/codex-rs/core/src/config/mod.rs
+@@ -67,6 +67,7 @@ use codex_features::FeatureOverrides;
+ use codex_features::FeatureToml;
+ use codex_features::Features;
+ use codex_features::FeaturesToml;
++use codex_features::IntatisAgentWorkspaceSandboxToml;
+ use codex_features::MultiAgentV2ConfigToml;
+ use codex_features::NetworkProxyConfigToml;
+ use codex_features::TokenBudgetConfigToml;
+@@ -1163,6 +1164,21 @@ impl Default for CurrentTimeReminderConfig {
+     }
+ }
+ 
++#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
++pub struct IntatisAgentWorkspacePreset {
++    pub cwd: PathBuf,
++    pub workspace_roots: Vec<PathBuf>,
++    pub description: String,
++    pub sandbox: IntatisAgentWorkspaceSandbox,
++}
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
++#[serde(rename_all = "kebab-case")]
++pub enum IntatisAgentWorkspaceSandbox {
++    ReadOnly,
++    WorkspaceWrite,
++}
++
+ #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+ pub struct MultiAgentV2Config {
+     pub max_concurrent_threads_per_session: usize,
+@@ -1174,9 +1190,11 @@ pub struct MultiAgentV2Config {
+     pub subagent_usage_hint_text: Option<String>,
+     pub multi_agent_mode_hint_text: Option<String>,
+     pub tool_namespace: Option<String>,
++    pub flat_tools: bool,
+     pub hide_spawn_agent_metadata: bool,
+     pub expose_spawn_agent_model_overrides: bool,
+     pub non_code_mode_only: bool,
++    pub intatis_agent_workspaces: BTreeMap<String, IntatisAgentWorkspacePreset>,
+ }
+ 
+ impl MultiAgentV2Config {
+@@ -1197,9 +1215,11 @@ impl MultiAgentV2Config {
+             )),
+             multi_agent_mode_hint_text: None,
+             tool_namespace: Some(DEFAULT_MULTI_AGENT_V2_TOOL_NAMESPACE.to_string()),
++            flat_tools: false,
+             hide_spawn_agent_metadata: true,
+             expose_spawn_agent_model_overrides: true,
+             non_code_mode_only: true,
++            intatis_agent_workspaces: BTreeMap::new(),
+         }
+     }
+ }
+@@ -2592,9 +2612,38 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
+         .and_then(|config| config.tool_namespace.as_ref())
+         .cloned()
+         .or(default.tool_namespace);
++    let flat_tools = base
++        .and_then(|config| config.flat_tools)
++        .unwrap_or(default.flat_tools);
+     let non_code_mode_only = base
+         .and_then(|config| config.non_code_mode_only)
+         .unwrap_or(default.non_code_mode_only);
++    let intatis_agent_workspaces = base
++        .and_then(|config| config.intatis_agent_workspaces.as_ref())
++        .map(|workspaces| {
++            workspaces
++                .iter()
++                .map(|(id, workspace)| {
++                    (
++                        id.clone(),
++                        IntatisAgentWorkspacePreset {
++                            cwd: workspace.cwd.clone(),
++                            workspace_roots: workspace.workspace_roots.clone(),
++                            description: workspace.description.clone(),
++                            sandbox: match workspace.sandbox {
++                                IntatisAgentWorkspaceSandboxToml::ReadOnly => {
++                                    IntatisAgentWorkspaceSandbox::ReadOnly
++                                }
++                                IntatisAgentWorkspaceSandboxToml::WorkspaceWrite => {
++                                    IntatisAgentWorkspaceSandbox::WorkspaceWrite
++                                }
++                            },
++                        },
++                    )
++                })
++                .collect()
++        })
++        .unwrap_or_default();
+ 
+     MultiAgentV2Config {
+         max_concurrent_threads_per_session,
+@@ -2606,9 +2655,11 @@ fn resolve_multi_agent_v2_config(config_toml: &ConfigToml) -> MultiAgentV2Config
+         subagent_usage_hint_text,
+         multi_agent_mode_hint_text,
+         tool_namespace,
++        flat_tools,
+         hide_spawn_agent_metadata,
+         expose_spawn_agent_model_overrides,
+         non_code_mode_only,
++        intatis_agent_workspaces,
+     }
+ }
+ 
+@@ -3015,6 +3066,145 @@ fn validate_multi_agent_v2_tool_namespace(namespace: Option<&str>) -> std::io::R
+     Ok(())
+ }
+ 
++fn validate_intatis_agent_workspaces(
++    workspaces: &BTreeMap<String, IntatisAgentWorkspacePreset>,
++) -> std::io::Result<()> {
++    const ID_MAX_CHARS: usize = 64;
++    const DESCRIPTION_MAX_CHARS: usize = 512;
++
++    for (id, workspace) in workspaces {
++        let label = format!("features.multi_agent_v2.intatis_agent_workspaces.{id}");
++        if id.is_empty()
++            || id.chars().count() > ID_MAX_CHARS
++            || !id
++                .bytes()
++                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
++        {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                "features.multi_agent_v2.intatis_agent_workspaces keys must match ^[a-zA-Z0-9_-]{1,64}$",
++            ));
++        }
++        if workspace.description.trim() != workspace.description
++            || workspace.description.is_empty()
++            || workspace.description.chars().count() > DESCRIPTION_MAX_CHARS
++            || workspace.description.chars().any(char::is_control)
++        {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                format!(
++                    "{label}.description must be a trimmed, nonempty, single-line description of at most {DESCRIPTION_MAX_CHARS} characters"
++                ),
++            ));
++        }
++        let cwd = AbsolutePathBuf::from_absolute_path_checked(&workspace.cwd).map_err(|err| {
++            std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                format!("{label}.cwd must be an absolute normalized path: {err}"),
++            )
++        })?;
++        if workspace.workspace_roots.is_empty() {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                format!("{label}.workspace_roots must not be empty"),
++            ));
++        }
++        let mut roots = Vec::with_capacity(workspace.workspace_roots.len());
++        for root in &workspace.workspace_roots {
++            let root = AbsolutePathBuf::from_absolute_path_checked(root).map_err(|err| {
++                std::io::Error::new(
++                    std::io::ErrorKind::InvalidInput,
++                    format!(
++                        "{label}.workspace_roots entries must be absolute normalized paths: {err}"
++                    ),
++                )
++            })?;
++            if roots.contains(&root) {
++                return Err(std::io::Error::new(
++                    std::io::ErrorKind::InvalidInput,
++                    format!("{label}.workspace_roots must not contain duplicates"),
++                ));
++            }
++            roots.push(root);
++        }
++        if !roots
++            .iter()
++            .any(|root| cwd.as_path().starts_with(root.as_path()))
++        {
++            return Err(std::io::Error::new(
++                std::io::ErrorKind::InvalidInput,
++                format!("{label}.cwd must be contained by one of its workspace_roots"),
++            ));
++        }
++    }
++
++    Ok(())
++}
++
++pub(crate) fn apply_intatis_agent_workspace_preset(
++    config: &mut Config,
++    preset_id: &str,
++    preset: &IntatisAgentWorkspacePreset,
++    approved_parent_roots: &[AbsolutePathBuf],
++) -> Result<(AbsolutePathBuf, Vec<AbsolutePathBuf>), String> {
++    let cwd = AbsolutePathBuf::from_absolute_path_checked(&preset.cwd)
++        .map_err(|err| format!("workspace preset `{preset_id}` has an invalid cwd: {err}"))?;
++    if preset.workspace_roots.is_empty() {
++        return Err(format!(
++            "workspace preset `{preset_id}` has no workspace roots"
++        ));
++    }
++    let mut workspace_roots = Vec::with_capacity(preset.workspace_roots.len());
++    for root in &preset.workspace_roots {
++        let root = AbsolutePathBuf::from_absolute_path_checked(root).map_err(|err| {
++            format!("workspace preset `{preset_id}` has an invalid workspace root: {err}")
++        })?;
++        if workspace_roots.contains(&root) {
++            return Err(format!(
++                "workspace preset `{preset_id}` contains duplicate workspace roots"
++            ));
++        }
++        workspace_roots.push(root);
++    }
++    if !workspace_roots
++        .iter()
++        .any(|root| cwd.as_path().starts_with(root.as_path()))
++    {
++        return Err(format!(
++            "workspace preset `{preset_id}` cwd is outside its workspace roots"
++        ));
++    }
++    if workspace_roots
++        .iter()
++        .any(|root| !approved_parent_roots.contains(root))
++    {
++        return Err(format!(
++            "workspace preset `{preset_id}` includes a root that is not approved by the parent turn"
++        ));
++    }
++
++    let permission_profile = match preset.sandbox {
++        IntatisAgentWorkspaceSandbox::ReadOnly => PermissionProfile::read_only(),
++        IntatisAgentWorkspaceSandbox::WorkspaceWrite => PermissionProfile::workspace_write(),
++    };
++    config
++        .permissions
++        .replace_permission_profile_from_session_snapshot(PermissionProfileSnapshot::legacy(
++            permission_profile,
++        ))
++        .map_err(|err| {
++            format!("workspace preset `{preset_id}` has an invalid sandbox profile: {err}")
++        })?;
++    config.cwd = cwd.clone();
++    config.workspace_roots = workspace_roots.clone();
++    config.workspace_roots_explicit = true;
++    config
++        .permissions
++        .set_workspace_roots(workspace_roots.clone());
++
++    Ok((cwd, workspace_roots))
++}
++
+ impl Config {
+     #[cfg(test)]
+     async fn load_from_base_config_with_overrides(
+@@ -3584,6 +3774,7 @@ impl Config {
+             ));
+         }
+         validate_multi_agent_v2_tool_namespace(multi_agent_v2.tool_namespace.as_deref())?;
++        validate_intatis_agent_workspaces(&multi_agent_v2.intatis_agent_workspaces)?;
+         let agents_enabled = cfg
+             .agents
+             .as_ref()
+diff --git a/codex-rs/core/src/thread_manager.rs b/codex-rs/core/src/thread_manager.rs
+index 7059939..4fa42f0 100644
+--- a/codex-rs/core/src/thread_manager.rs
++++ b/codex-rs/core/src/thread_manager.rs
+@@ -1,6 +1,8 @@
+ use crate::CodexAppsToolsCache;
+ use crate::SkillsService;
+ use crate::agent::AgentControl;
++use crate::agent_communication::AgentCommunicationContext;
++use crate::agent_communication::AgentCommunicationKind;
+ use crate::attestation::AttestationProvider;
+ use crate::codex_thread::CodexThread;
+ use crate::config::Config;
+@@ -42,6 +44,7 @@ use codex_model_provider_info::ModelProviderInfo;
+ use codex_model_provider_info::OPENAI_PROVIDER_ID;
+ use codex_models_manager::manager::RefreshStrategy;
+ use codex_models_manager::manager::SharedModelsManager;
++use codex_protocol::AgentPath;
+ use codex_protocol::ThreadId;
+ use codex_protocol::config_types::CollaborationModeMask;
+ use codex_protocol::error::CodexErr;
+@@ -50,6 +53,7 @@ use codex_protocol::openai_models::ModelPreset;
+ use codex_protocol::protocol::Event;
+ use codex_protocol::protocol::EventMsg;
+ use codex_protocol::protocol::InitialHistory;
++use codex_protocol::protocol::InterAgentCommunication;
+ use codex_protocol::protocol::MultiAgentVersion;
+ use codex_protocol::protocol::Op;
+ use codex_protocol::protocol::ResumedHistory;
+@@ -63,6 +67,7 @@ use codex_protocol::protocol::TurnAbortReason;
+ use codex_protocol::protocol::TurnAbortedEvent;
+ use codex_protocol::protocol::TurnEnvironmentSelection;
+ use codex_protocol::protocol::W3cTraceContext;
++use codex_protocol::user_input::MAX_USER_INPUT_TEXT_CHARS;
+ use codex_rollout::state_db::StateDbHandle;
+ use codex_thread_store::InMemoryThreadStore;
+ use codex_thread_store::LoadThreadHistoryParams;
+@@ -661,6 +666,94 @@ impl ThreadManager {
+         Ok(subtree_thread_ids)
+     }
+ 
++    /// Deliver an Intatis control-plane message to a verified MultiAgentV2 descendant.
++    ///
++    /// Routing is deterministic: `root_thread_id` is the author, `target_thread_id` must be in
++    /// that root's recorded spawn subtree, and delivery uses the existing AgentControl mailbox.
++    pub async fn send_subagent_message(
++        &self,
++        root_thread_id: ThreadId,
++        target_thread_id: ThreadId,
++        message: String,
++        trigger_turn: bool,
++    ) -> CodexResult<String> {
++        let trimmed = message.trim();
++        if trimmed.is_empty() {
++            return Err(CodexErr::InvalidRequest(
++                "subagent message must not be empty".to_string(),
++            ));
++        }
++        let message_chars = message.chars().count();
++        if message_chars > MAX_USER_INPUT_TEXT_CHARS {
++            return Err(CodexErr::InvalidRequest(format!(
++                "subagent message exceeds the maximum length of {MAX_USER_INPUT_TEXT_CHARS} characters"
++            )));
++        }
++
++        let root_thread = self.get_thread(root_thread_id).await?;
++        let root_snapshot = root_thread.config_snapshot().await;
++        if root_snapshot.parent_thread_id.is_some()
++            || root_snapshot.session_source.is_non_root_agent()
++            || root_thread.session.multi_agent_version() != Some(MultiAgentVersion::V2)
++        {
++            return Err(CodexErr::InvalidRequest(format!(
++                "thread {root_thread_id} is not a MultiAgentV2 root"
++            )));
++        }
++        if target_thread_id == root_thread_id
++            || !self
++                .list_agent_subtree_thread_ids(root_thread_id)
++                .await?
++                .contains(&target_thread_id)
++        {
++            return Err(CodexErr::InvalidRequest(format!(
++                "thread {target_thread_id} is not a descendant of root {root_thread_id}"
++            )));
++        }
++
++        let root_config = root_thread.session.get_config().await;
++        let agent_control = root_thread.session.services.agent_control.clone();
++        agent_control
++            .restore_v2_agent_metadata(root_config.as_ref(), root_thread_id)
++            .await;
++        let target_metadata = agent_control.ensure_agent_known(target_thread_id)?;
++        let recipient = target_metadata.agent_path.ok_or_else(|| {
++            CodexErr::InvalidRequest(format!(
++                "subagent {target_thread_id} is missing its canonical agent path"
++            ))
++        })?;
++        if recipient.is_root() {
++            return Err(CodexErr::InvalidRequest(
++                "control-plane subagent messages cannot target the root agent".to_string(),
++            ));
++        }
++        let mut resume_config = (*root_config).clone();
++        resume_config.base_instructions = None;
++        agent_control
++            .ensure_v2_agent_loaded(resume_config, target_thread_id)
++            .await?;
++
++        let communication = InterAgentCommunication::new(
++            AgentPath::root(),
++            recipient,
++            Vec::new(),
++            message,
++            trigger_turn,
++        );
++        let kind = if trigger_turn {
++            AgentCommunicationKind::ControlPlaneFollowup
++        } else {
++            AgentCommunicationKind::ControlPlaneMessage
++        };
++        agent_control
++            .send_inter_agent_communication(
++                target_thread_id,
++                communication,
++                AgentCommunicationContext::new(kind, root_thread_id),
++            )
++            .await
++    }
++
+     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
+         // Box delegated thread-spawn futures so these convenience wrappers do
+         // not inline the full spawn path into every caller's async state.
+@@ -1397,6 +1490,7 @@ impl ThreadManagerState {
+             /*inherited_environments*/ None,
+             /*inherited_exec_policy*/ None,
+             /*environments*/ None,
++            Vec::new(),
+         ))
+         .await
+     }
+@@ -1415,6 +1509,7 @@ impl ThreadManagerState {
+         inherited_environments: Option<TurnEnvironmentSnapshot>,
+         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+         environments: Option<Vec<TurnEnvironmentSelection>>,
++        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+     ) -> CodexResult<NewThread> {
+         let environments = environments.unwrap_or_else(|| {
+             default_thread_environment_selections(
+@@ -1434,7 +1529,7 @@ impl ThreadManagerState {
+             parent_thread_id,
+             forked_from_thread_id,
+             thread_source,
+-            Vec::new(),
++            dynamic_tools,
+             metrics_service_name,
+             inherited_environments,
+             inherited_exec_policy,
+@@ -1504,6 +1599,7 @@ impl ThreadManagerState {
+         inherited_environments: Option<TurnEnvironmentSnapshot>,
+         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+         environments: Option<Vec<TurnEnvironmentSelection>>,
++        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+         thread_extension_init: ExtensionDataInit,
+     ) -> CodexResult<NewThread> {
+         let environments = environments.unwrap_or_else(|| {
+@@ -1524,7 +1620,7 @@ impl ThreadManagerState {
+             parent_thread_id,
+             forked_from_thread_id,
+             thread_source,
+-            Vec::new(),
++            dynamic_tools,
+             /*metrics_service_name*/ None,
+             inherited_environments,
+             inherited_exec_policy,
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs b/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
+index a0cbee7..019ce02 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents/spawn.rs
+@@ -128,6 +128,7 @@ async fn handle_spawn_agent(
+             fork_mode: args.fork_context.then_some(SpawnAgentForkMode::FullHistory),
+             parent_thread_id: Some(session.thread_id),
+             environments: Some(turn.environments.to_selections()),
++            dynamic_tools: None,
+         },
+     ))
+     .await
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_spec.rs b/codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+index 2eb82e1..bdd88cf 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_spec.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_spec.rs
+@@ -31,6 +31,7 @@ pub struct SpawnAgentToolOptions {
+     pub expose_spawn_agent_model_overrides: bool,
+     pub multi_agent_version: MultiAgentVersion,
+     pub usage_hint_text: Option<String>,
++    pub intatis_agent_workspaces: BTreeMap<String, String>,
+ }
+ 
+ impl Default for SpawnAgentToolOptions {
+@@ -43,6 +44,7 @@ impl Default for SpawnAgentToolOptions {
+             expose_spawn_agent_model_overrides: false,
+             multi_agent_version: MultiAgentVersion::Disabled,
+             usage_hint_text: None,
++            intatis_agent_workspaces: BTreeMap::new(),
+         }
+     }
+ }
+@@ -116,6 +118,7 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
+     if !options.expose_spawn_agent_model_overrides {
+         properties.remove("model");
+         properties.remove("reasoning_effort");
++        properties.remove("service_tier");
+     }
+     properties.insert(
+         "task_name".to_string(),
+@@ -124,6 +127,38 @@ pub fn create_spawn_agent_tool_v2(options: SpawnAgentToolOptions) -> ToolSpec {
+                 .to_string(),
+         )),
+     );
++    if !options.intatis_agent_workspaces.is_empty() {
++        let workspace_description = options
++            .intatis_agent_workspaces
++            .iter()
++            .map(|(id, description)| format!("- `{id}`: {description}"))
++            .collect::<Vec<_>>()
++            .join("\n");
++        let preset_values = options
++            .intatis_agent_workspaces
++            .keys()
++            .cloned()
++            .map(Value::String)
++            .collect::<Vec<_>>();
++        properties.insert(
++            "agent_type".to_string(),
++            JsonSchema::string_enum(
++                preset_values.clone(),
++                Some(format!(
++                    "Optional complete host-approved inference preset for the new agent. Omit to inherit the parent route. When selected, use the same value for `workspace` and set `fork_turns` to `none` or a positive integer. Available presets:\n{workspace_description}"
++                )),
++            ),
++        );
++        properties.insert(
++            "workspace".to_string(),
++            JsonSchema::string_enum(
++                preset_values,
++                Some(format!(
++                    "Optional pre-approved workspace preset for the new agent. Omit to inherit the parent workspace. When selected, use the same value for `agent_type` and set `fork_turns` to `none` or a positive integer. Available presets:\n{workspace_description}"
++                )),
++            ),
++        );
++    }
+ 
+     ToolSpec::Function(ResponsesApiTool {
+         name: "spawn_agent".to_string(),
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs b/codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs
+index 96a6212..45f2fa3 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_spec_tests.rs
+@@ -53,6 +53,7 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
+         expose_spawn_agent_model_overrides: true,
+         multi_agent_version: MultiAgentVersion::V2,
+         usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
+     });
+ 
+     let ToolSpec::Function(ResponsesApiTool {
+@@ -124,6 +125,51 @@ fn spawn_agent_tool_v2_requires_task_name_and_lists_visible_models() {
+     );
+ }
+ 
++#[test]
++fn spawn_agent_tool_v2_lists_only_workspace_ids_and_safe_descriptions() {
++    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
++        intatis_agent_workspaces: BTreeMap::from([
++            (
++                "reader".to_string(),
++                "Read-only approved project".to_string(),
++            ),
++            (
++                "writer".to_string(),
++                "Writable approved project".to_string(),
++            ),
++        ]),
++        ..Default::default()
++    });
++    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
++        panic!("spawn_agent should be a function tool");
++    };
++    let workspace = parameters
++        .properties
++        .as_ref()
++        .and_then(|properties| properties.get("workspace"))
++        .expect("workspace preset should be model-visible");
++    assert_eq!(
++        workspace.enum_values.as_ref(),
++        Some(&vec![json!("reader"), json!("writer")])
++    );
++    let agent_type = parameters
++        .properties
++        .as_ref()
++        .and_then(|properties| properties.get("agent_type"))
++        .expect("agent type preset should be model-visible");
++    assert_eq!(
++        agent_type.enum_values.as_ref(),
++        Some(&vec![json!("reader"), json!("writer")])
++    );
++    let description = workspace
++        .description
++        .as_deref()
++        .expect("workspace should have a description");
++    assert!(description.contains("`reader`: Read-only approved project"));
++    assert!(description.contains("`writer`: Writable approved project"));
++    assert!(!description.contains('/'));
++}
++
+ #[test]
+ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
+     let tool = create_spawn_agent_tool_v1(SpawnAgentToolOptions {
+@@ -134,6 +180,7 @@ fn spawn_agent_tool_v1_keeps_legacy_fork_context_field() {
+         expose_spawn_agent_model_overrides: true,
+         multi_agent_version: MultiAgentVersion::V1,
+         usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
+     });
+ 
+     let ToolSpec::Namespace(namespace) = tool else {
+@@ -199,6 +246,7 @@ fn spawn_agent_tool_caps_visible_model_summaries() {
+         expose_spawn_agent_model_overrides: true,
+         multi_agent_version: MultiAgentVersion::V2,
+         usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
+     });
+ 
+     let ToolSpec::Function(ResponsesApiTool { description, .. }) = tool else {
+@@ -245,6 +293,7 @@ fn spawn_agent_tool_keeps_model_controls_when_spawn_metadata_is_hidden() {
+         expose_spawn_agent_model_overrides: true,
+         multi_agent_version: MultiAgentVersion::V2,
+         usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
+     });
+ 
+     let ToolSpec::Function(ResponsesApiTool {
+@@ -278,6 +327,7 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
+         expose_spawn_agent_model_overrides: false,
+         multi_agent_version: MultiAgentVersion::V2,
+         usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
+     });
+ 
+     let ToolSpec::Function(ResponsesApiTool {
+@@ -300,6 +350,33 @@ fn spawn_agent_tool_hides_model_controls_without_override_exposure() {
+     assert!(!description.contains("Available model overrides"));
+ }
+ 
++#[test]
++fn spawn_agent_tool_keeps_agent_type_but_hides_every_raw_route_override() {
++    let tool = create_spawn_agent_tool_v2(SpawnAgentToolOptions {
++        available_models: vec![model_preset("visible", /*show_in_picker*/ true)],
++        agent_type_description: "role help".to_string(),
++        expose_agent_type: true,
++        hide_agent_type_model_reasoning: false,
++        expose_spawn_agent_model_overrides: false,
++        multi_agent_version: MultiAgentVersion::V2,
++        usage_hint_text: None,
++        intatis_agent_workspaces: BTreeMap::new(),
++    });
++
++    let ToolSpec::Function(ResponsesApiTool { parameters, .. }) = tool else {
++        panic!("spawn_agent should be a function tool");
++    };
++    let properties = parameters
++        .properties
++        .as_ref()
++        .expect("spawn_agent should use object params");
++
++    assert!(properties.contains_key("agent_type"));
++    for property in ["model", "reasoning_effort", "service_tier"] {
++        assert!(!properties.contains_key(property));
++    }
++}
++
+ #[test]
+ fn send_message_tool_requires_message_and_has_no_output_schema() {
+     let ToolSpec::Function(ResponsesApiTool {
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_tests.rs b/codex-rs/core/src/tools/handlers/multi_agents_tests.rs
+index 55a2425..ab39276 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_tests.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_tests.rs
+@@ -2,6 +2,8 @@ use super::*;
+ use crate::ThreadManager;
+ use crate::config::AgentRoleConfig;
+ use crate::config::DEFAULT_AGENT_MAX_DEPTH;
++use crate::config::IntatisAgentWorkspacePreset;
++use crate::config::IntatisAgentWorkspaceSandbox;
+ use crate::function_tool::FunctionCallError;
+ use crate::init_state_db;
+ use crate::local_agent_graph_store_from_state_db;
+@@ -29,6 +31,9 @@ use codex_protocol::ThreadId;
+ use codex_protocol::config_types::ApprovalsReviewer;
+ use codex_protocol::config_types::ServiceTier;
+ use codex_protocol::config_types::ShellEnvironmentPolicy;
++use codex_protocol::dynamic_tools::DynamicToolFunctionSpec;
++use codex_protocol::dynamic_tools::DynamicToolSpec;
++use codex_protocol::models::AgentMessageInputContent;
+ use codex_protocol::models::BaseInstructions;
+ use codex_protocol::models::ContentItem;
+ use codex_protocol::models::FunctionCallOutputBody;
+@@ -57,6 +62,7 @@ use codex_protocol::protocol::TurnAbortedEvent;
+ use codex_protocol::protocol::TurnCompleteEvent;
+ use codex_protocol::user_input::UserInput;
+ use codex_state::DirectionalThreadSpawnEdgeStatus;
++use codex_utils_absolute_path::AbsolutePathBuf;
+ use core_test_support::TempDirExt;
+ use pretty_assertions::assert_eq;
+ use serde::Deserialize;
+@@ -89,6 +95,26 @@ fn invocation(
+     }
+ }
+ 
++#[test]
++fn multi_agent_v2_tool_message_is_plaintext_model_input() {
++    let recipient = AgentPath::try_from("/root/worker").expect("agent path");
++    let communication = crate::tools::handlers::multi_agents_v2::communication_from_tool_message(
++        AgentPath::root(),
++        recipient,
++        "inspect the selected workspace".to_string(),
++    );
++
++    assert!(matches!(
++        communication.to_model_input_item(),
++        ResponseItem::AgentMessage {
++            content,
++            ..
++        } if content == vec![AgentMessageInputContent::InputText {
++            text: "inspect the selected workspace".to_string(),
++        }]
++    ));
++}
++
+ fn function_payload(args: serde_json::Value) -> ToolPayload {
+     ToolPayload::Function {
+         arguments: args.to_string(),
+@@ -974,6 +1000,280 @@ async fn multi_agent_v2_spawn_partial_fork_turns_allows_agent_type_override() {
+     assert_eq!(snapshot.reasoning_effort, Some(ReasoningEffort::Minimal));
+ }
+ 
++#[tokio::test]
++async fn multi_agent_v2_all_fork_modes_inherit_app_server_dynamic_tools() {
++    let (mut session, mut turn) = make_session_and_context().await;
++    let dynamic_tools = vec![DynamicToolSpec::Function(DynamicToolFunctionSpec {
++        name: "intatis_business_tool".to_string(),
++        description: "Intatis business tool".to_string(),
++        input_schema: json!({
++            "type": "object",
++            "properties": {},
++            "additionalProperties": false
++        }),
++        defer_loading: false,
++    })];
++    let mut config = (*turn.config).clone();
++    config
++        .features
++        .enable(Feature::MultiAgentV2)
++        .expect("test config should allow feature update");
++    set_turn_config(&mut turn, config);
++    turn.dynamic_tools = dynamic_tools.clone();
++
++    let manager = thread_manager();
++    let root = manager
++        .start_thread((*turn.config).clone())
++        .await
++        .expect("root thread should start");
++    root.thread.session.new_default_turn().await;
++    session.services.agent_control = manager.agent_control();
++    session.thread_id = root.thread_id;
++    let session = Arc::new(session);
++    let turn = Arc::new(turn);
++
++    for (task_name, fork_turns) in [
++        ("tools_none", "none"),
++        ("tools_all", "all"),
++        ("tools_recent", "1"),
++    ] {
++        SpawnAgentHandlerV2::default()
++            .handle(invocation(
++                session.clone(),
++                turn.clone(),
++                "spawn_agent",
++                function_payload(json!({
++                    "message": "inspect inherited tools",
++                    "task_name": task_name,
++                    "fork_turns": fork_turns
++                })),
++            ))
++            .await
++            .expect("spawn_agent should preserve dynamic tools");
++        let child_thread_id = session
++            .services
++            .agent_control
++            .resolve_agent_reference(session.thread_id, &turn.session_source, task_name)
++            .await
++            .expect("spawned task should resolve");
++        let child = manager
++            .get_thread(child_thread_id)
++            .await
++            .expect("child thread should exist");
++        let child_turn = child.session.new_default_turn().await;
++        assert_eq!(
++            child_turn.dynamic_tools, dynamic_tools,
++            "fork_turns={fork_turns} must inherit registered App Server tools"
++        );
++    }
++}
++
++#[tokio::test]
++async fn multi_agent_v2_workspace_presets_select_sandbox_and_fail_closed() {
++    let workspace = tempfile::tempdir().expect("workspace temp dir");
++    let approved_root = AbsolutePathBuf::from_absolute_path_checked(workspace.path())
++        .expect("approved root should be absolute");
++    let reader_cwd = approved_root.join("reader");
++    let writer_cwd = approved_root.join("writer");
++    std::fs::create_dir_all(reader_cwd.as_path()).expect("create reader cwd");
++    std::fs::create_dir_all(writer_cwd.as_path()).expect("create writer cwd");
++
++    let (mut session, mut turn) = make_session_and_context().await;
++    let mut config = (*turn.config).clone();
++    config
++        .features
++        .enable(Feature::MultiAgentV2)
++        .expect("test config should allow feature update");
++    config.cwd = approved_root.clone();
++    config.workspace_roots = vec![approved_root.clone()];
++    config.workspace_roots_explicit = true;
++    config
++        .permissions
++        .set_workspace_roots(vec![approved_root.clone()]);
++    for role in ["reader", "writer", "outside", "relative", "missing"] {
++        config.agent_roles.insert(
++            role.to_string(),
++            AgentRoleConfig {
++                description: Some(format!("{role} role")),
++                config_file: None,
++                nickname_candidates: None,
++            },
++        );
++    }
++    config.multi_agent_v2.intatis_agent_workspaces.insert(
++        "reader".to_string(),
++        IntatisAgentWorkspacePreset {
++            cwd: reader_cwd.to_path_buf(),
++            workspace_roots: vec![approved_root.to_path_buf()],
++            description: "Read-only approved project".to_string(),
++            sandbox: IntatisAgentWorkspaceSandbox::ReadOnly,
++        },
++    );
++    config.multi_agent_v2.intatis_agent_workspaces.insert(
++        "writer".to_string(),
++        IntatisAgentWorkspacePreset {
++            cwd: writer_cwd.to_path_buf(),
++            workspace_roots: vec![approved_root.to_path_buf()],
++            description: "Writable approved project".to_string(),
++            sandbox: IntatisAgentWorkspaceSandbox::WorkspaceWrite,
++        },
++    );
++    let outside_root = AbsolutePathBuf::from_absolute_path_checked(
++        workspace.path().parent().expect("temp dir parent"),
++    )
++    .expect("outside root should be absolute");
++    config.multi_agent_v2.intatis_agent_workspaces.insert(
++        "outside".to_string(),
++        IntatisAgentWorkspacePreset {
++            cwd: outside_root.to_path_buf(),
++            workspace_roots: vec![outside_root.to_path_buf()],
++            description: "Unapproved root".to_string(),
++            sandbox: IntatisAgentWorkspaceSandbox::ReadOnly,
++        },
++    );
++    config.multi_agent_v2.intatis_agent_workspaces.insert(
++        "relative".to_string(),
++        IntatisAgentWorkspacePreset {
++            cwd: PathBuf::from("relative/cwd"),
++            workspace_roots: vec![PathBuf::from("relative/root")],
++            description: "Invalid relative path".to_string(),
++            sandbox: IntatisAgentWorkspaceSandbox::ReadOnly,
++        },
++    );
++    set_turn_config(&mut turn, config);
++
++    let manager = thread_manager();
++    let root = manager
++        .start_thread((*turn.config).clone())
++        .await
++        .expect("root thread should start");
++    session.services.agent_control = manager.agent_control();
++    session.thread_id = root.thread_id;
++    let session = Arc::new(session);
++    let turn = Arc::new(turn);
++
++    for (role, expected_cwd, expect_write) in [
++        ("reader", reader_cwd.clone(), false),
++        ("writer", writer_cwd.clone(), true),
++    ] {
++        SpawnAgentHandlerV2::default()
++            .handle(invocation(
++                session.clone(),
++                turn.clone(),
++                "spawn_agent",
++                function_payload(json!({
++                    "message": "work in the selected project",
++                    "task_name": format!("{role}_agent"),
++                    "agent_type": role,
++                    "workspace": role,
++                    "fork_turns": "none"
++                })),
++            ))
++            .await
++            .expect("approved workspace preset should spawn");
++        let child_id = session
++            .services
++            .agent_control
++            .resolve_agent_reference(
++                session.thread_id,
++                &turn.session_source,
++                &format!("{role}_agent"),
++            )
++            .await
++            .expect("child should resolve");
++        let snapshot = manager
++            .get_thread(child_id)
++            .await
++            .expect("child should exist")
++            .config_snapshot()
++            .await;
++        assert_eq!(snapshot.cwd(), &expected_cwd);
++        assert_eq!(snapshot.workspace_roots, vec![approved_root.clone()]);
++        assert_eq!(
++            matches!(
++                snapshot.sandbox_policy(),
++                SandboxPolicy::WorkspaceWrite { .. }
++            ),
++            expect_write
++        );
++        assert_eq!(
++            matches!(snapshot.sandbox_policy(), SandboxPolicy::ReadOnly { .. }),
++            !expect_write
++        );
++    }
++
++    for (args, expected_error) in [
++        (
++            json!({
++                "message": "missing workspace",
++                "task_name": "missing_workspace",
++                "agent_type": "reader",
++                "fork_turns": "none"
++            }),
++            "an explicit agent_type requires its matching workspace preset",
++        ),
++        (
++            json!({
++                "message": "bad mismatch",
++                "task_name": "mismatch",
++                "agent_type": "reader",
++                "workspace": "writer",
++                "fork_turns": "none"
++            }),
++            "an explicit agent_type requires its matching workspace preset",
++        ),
++        (
++            json!({
++                "message": "unknown preset",
++                "task_name": "unknown",
++                "agent_type": "missing",
++                "workspace": "missing",
++                "fork_turns": "none"
++            }),
++            "unknown workspace preset `missing`",
++        ),
++        (
++            json!({
++                "message": "outside preset",
++                "task_name": "outside",
++                "agent_type": "outside",
++                "workspace": "outside",
++                "fork_turns": "none"
++            }),
++            "includes a root that is not approved by the parent turn",
++        ),
++        (
++            json!({
++                "message": "relative preset",
++                "task_name": "relative",
++                "agent_type": "relative",
++                "workspace": "relative",
++                "fork_turns": "none"
++            }),
++            "has an invalid cwd",
++        ),
++    ] {
++        let result = SpawnAgentHandlerV2::default()
++            .handle(invocation(
++                session.clone(),
++                turn.clone(),
++                "spawn_agent",
++                function_payload(args),
++            ))
++            .await;
++        let Err(err) = result else {
++            panic!("invalid workspace selection must fail closed");
++        };
++        let FunctionCallError::RespondToModel(message) = err else {
++            panic!("workspace rejection should be model-facing");
++        };
++        assert!(
++            message.contains(expected_error),
++            "expected {expected_error:?} in {message:?}"
++        );
++    }
++}
++
+ #[tokio::test]
+ async fn spawn_agent_returns_agent_id_without_task_name() {
+     let (mut session, turn) = make_session_and_context().await;
+@@ -1156,8 +1456,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
+                     if communication.author == AgentPath::root()
+                         && communication.recipient.as_str() == "/root/test_process"
+                         && communication.other_recipients.is_empty()
+-                        && communication.content.is_empty()
+-                        && communication.encrypted_content.as_deref() == Some("encrypted-spawn-message")
++                        && communication.content == "encrypted-spawn-message"
++                        && communication.encrypted_content.is_none()
+                         && communication.trigger_turn
+             )
+     }));
+@@ -1183,8 +1483,8 @@ async fn multi_agent_v2_spawn_returns_path_and_send_message_accepts_relative_pat
+                     if communication.author == AgentPath::root()
+                         && communication.recipient.as_str() == "/root/test_process"
+                         && communication.other_recipients.is_empty()
+-                        && communication.content.is_empty()
+-                        && communication.encrypted_content.as_deref() == Some("encrypted-send-message")
++                        && communication.content == "encrypted-send-message"
++                        && communication.encrypted_content.is_none()
+                         && !communication.trigger_turn
+             )
+     }));
+@@ -1379,8 +1679,8 @@ async fn multi_agent_v2_send_message_accepts_root_target_from_child() {
+                     if communication.author == child_path
+                         && communication.recipient == AgentPath::root()
+                         && communication.other_recipients.is_empty()
+-                        && communication.content.is_empty()
+-                        && communication.encrypted_content.as_deref() == Some("encrypted-done")
++                        && communication.content == "encrypted-done"
++                        && communication.encrypted_content.is_none()
+                         && !communication.trigger_turn
+             )
+     }));
+@@ -1893,8 +2193,8 @@ async fn multi_agent_v2_send_message_rejects_interrupt_parameter() {
+             if communication.author == AgentPath::root()
+                 && communication.recipient.as_str() == "/root/worker"
+                 && communication.other_recipients.is_empty()
+-                && communication.content.is_empty()
+-                && communication.encrypted_content.as_deref() == Some("continue")
++                && communication.content == "continue"
++                && communication.encrypted_content.is_none()
+                 && !communication.trigger_turn
+     )));
+ }
+@@ -1979,7 +2279,8 @@ async fn multi_agent_v2_followup_task_completion_notifies_parent_on_every_turn()
+                 Op::InterAgentCommunication { communication }
+                     if communication.author == AgentPath::root()
+                         && communication.recipient == worker_path
+-                        && communication.encrypted_content.as_deref() == Some("continue")
++                        && communication.content == "continue"
++                        && communication.encrypted_content.is_none()
+                         && communication.trigger_turn
+             )
+     }));
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_v2.rs b/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+index d1446ec..c76d475 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_v2.rs
+@@ -56,7 +56,7 @@ pub(super) fn communication_from_tool_message(
+     recipient: AgentPath,
+     message: String,
+ ) -> InterAgentCommunication {
+-    InterAgentCommunication::new_encrypted(
++    InterAgentCommunication::new(
+         author,
+         recipient,
+         Vec::new(),
+diff --git a/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs b/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
+index 67f8057..0268e2d 100644
+--- a/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
++++ b/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs
+@@ -5,11 +5,14 @@ use crate::agent::next_thread_spawn_depth;
+ use crate::agent::role::DEFAULT_ROLE_NAME;
+ use crate::agent_communication::AgentCommunicationContext;
+ use crate::agent_communication::AgentCommunicationKind;
++use crate::config::apply_intatis_agent_workspace_preset;
+ use crate::tools::handlers::multi_agents_spec::SpawnAgentToolOptions;
+ use crate::tools::handlers::multi_agents_spec::create_spawn_agent_tool_v2;
+ use crate::tools::handlers::multi_agents_v2::message_tool::message_content;
+ use codex_protocol::AgentPath;
++use codex_protocol::protocol::TurnEnvironmentSelection;
+ use codex_tools::ToolSpec;
++use codex_utils_path_uri::PathUri;
+ 
+ #[derive(Default)]
+ pub(crate) struct Handler {
+@@ -54,6 +57,25 @@ async fn handle_spawn_agent(
+         .as_deref()
+         .map(str::trim)
+         .filter(|role| !role.is_empty());
++    if !turn
++        .config
++        .multi_agent_v2
++        .intatis_agent_workspaces
++        .is_empty()
++        && role_name.is_some()
++        && args.workspace.as_deref().map(str::trim) != role_name
++    {
++        return Err(FunctionCallError::RespondToModel(
++            "an explicit agent_type requires its matching workspace preset".to_string(),
++        ));
++    }
++    if let Some(workspace) = args.workspace.as_deref().map(str::trim)
++        && role_name != Some(workspace)
++    {
++        return Err(FunctionCallError::RespondToModel(
++            "workspace preset must match the explicit agent_type".to_string(),
++        ));
++    }
+ 
+     let message = message_content(args.message)?;
+     let session_source = turn.session_source.clone();
+@@ -86,6 +108,8 @@ async fn handle_spawn_agent(
+     )
+     .await?;
+     apply_spawn_agent_runtime_overrides(&mut config, turn.as_ref())?;
++    let child_environments =
++        resolve_intatis_agent_workspace(&mut config, turn.as_ref(), args.workspace.as_deref())?;
+ 
+     let spawn_source = thread_spawn_source(
+         session.thread_id,
+@@ -118,7 +142,8 @@ async fn handle_spawn_agent(
+                     fork_parent_spawn_call_id: fork_mode.as_ref().map(|_| call_id.clone()),
+                     fork_mode,
+                     parent_thread_id: Some(session.thread_id),
+-                    environments: Some(turn.environments.to_selections()),
++                    environments: Some(child_environments),
++                    dynamic_tools: Some(turn.dynamic_tools.clone()),
+                 },
+             ),
+     )
+@@ -181,6 +206,52 @@ struct SpawnAgentArgs {
+     service_tier: Option<String>,
+     fork_turns: Option<String>,
+     fork_context: Option<bool>,
++    workspace: Option<String>,
++}
++
++fn resolve_intatis_agent_workspace(
++    config: &mut crate::config::Config,
++    turn: &crate::session::turn_context::TurnContext,
++    requested_workspace: Option<&str>,
++) -> Result<Vec<TurnEnvironmentSelection>, FunctionCallError> {
++    let Some(requested_workspace) = requested_workspace else {
++        return Ok(turn.environments.to_selections());
++    };
++    let requested_workspace = requested_workspace.trim();
++    if requested_workspace.is_empty() {
++        return Err(FunctionCallError::RespondToModel(
++            "workspace preset id must not be empty".to_string(),
++        ));
++    }
++    let preset = turn
++        .config
++        .multi_agent_v2
++        .intatis_agent_workspaces
++        .get(requested_workspace)
++        .ok_or_else(|| {
++            FunctionCallError::RespondToModel(format!(
++                "unknown workspace preset `{requested_workspace}`"
++            ))
++        })?;
++
++    let (cwd, workspace_roots) = apply_intatis_agent_workspace_preset(
++        config,
++        requested_workspace,
++        preset,
++        &turn.config.workspace_roots,
++    )
++    .map_err(FunctionCallError::RespondToModel)?;
++
++    Ok(turn
++        .environments
++        .to_selections()
++        .into_iter()
++        .map(|selection| TurnEnvironmentSelection {
++            environment_id: selection.environment_id,
++            cwd: PathUri::from_abs_path(&cwd),
++            workspace_roots: workspace_roots.iter().map(PathUri::from_abs_path).collect(),
++        })
++        .collect())
+ }
+ 
+ impl SpawnAgentArgs {
+diff --git a/codex-rs/core/src/tools/spec_plan.rs b/codex-rs/core/src/tools/spec_plan.rs
+index 1694c1b..28a6ee3 100644
+--- a/codex-rs/core/src/tools/spec_plan.rs
++++ b/codex-rs/core/src/tools/spec_plan.rs
+@@ -778,9 +778,13 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
+             } else {
+                 ToolExposure::Direct
+             };
+-            let tool_namespace = namespace_tools_enabled(turn_context)
+-                .then_some(turn_context.config.multi_agent_v2.tool_namespace.as_deref())
+-                .flatten();
++            let tool_namespace = if turn_context.config.multi_agent_v2.flat_tools {
++                None
++            } else if namespace_tools_enabled(turn_context) {
++                turn_context.config.multi_agent_v2.tool_namespace.as_deref()
++            } else {
++                None
++            };
+             let agent_type_description =
+                 agent_type_description(turn_context, context.default_agent_type_description);
+             let hide_spawn_agent_metadata =
+@@ -798,6 +802,13 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
+                             .expose_spawn_agent_model_overrides,
+                         multi_agent_version: turn_context.multi_agent_version,
+                         usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
++                        intatis_agent_workspaces: turn_context
++                            .config
++                            .multi_agent_v2
++                            .intatis_agent_workspaces
++                            .iter()
++                            .map(|(id, workspace)| (id.clone(), workspace.description.clone()))
++                            .collect(),
+                     }),
+                     tool_namespace,
+                 ),
+@@ -843,6 +854,7 @@ fn add_collaboration_tools(context: &CoreToolPlanContext<'_>, planned_tools: &mu
+                     expose_spawn_agent_model_overrides: true,
+                     multi_agent_version: turn_context.multi_agent_version,
+                     usage_hint_text: turn_context.config.multi_agent_v2.usage_hint_text.clone(),
++                    intatis_agent_workspaces: BTreeMap::new(),
+                 }),
+                 exposure,
+             );
+diff --git a/codex-rs/core/src/tools/spec_plan_tests.rs b/codex-rs/core/src/tools/spec_plan_tests.rs
+index 6d51754..fd61d40 100644
+--- a/codex-rs/core/src/tools/spec_plan_tests.rs
++++ b/codex-rs/core/src/tools/spec_plan_tests.rs
+@@ -1453,6 +1453,56 @@ async fn multi_agent_v2_can_use_configured_tool_namespace() {
+     }
+ }
+ 
++#[tokio::test]
++async fn multi_agent_v2_flat_tools_keep_spawn_and_dynamic_business_functions_top_level() {
++    let flat = probe_with(
++        |turn| {
++            set_feature(turn, Feature::MultiAgentV2, /*enabled*/ true);
++            update_config(turn, |config| {
++                config.multi_agent_v2.flat_tools = true;
++                config.multi_agent_v2.tool_namespace = Some("collaboration".to_string());
++            });
++        },
++        ToolPlanInputs {
++            dynamic_tools: vec![dynamic_tool(
++                /*namespace*/ None,
++                "intatis_business_tool",
++                /*defer_loading*/ false,
++            )],
++            ..ToolPlanInputs::default()
++        },
++    )
++    .await;
++
++    flat.assert_visible_contains(&[
++        "spawn_agent",
++        "send_message",
++        "followup_task",
++        "wait_agent",
++        "interrupt_agent",
++        "list_agents",
++        "intatis_business_tool",
++    ]);
++    flat.assert_visible_lacks(&[MULTI_AGENT_V2_NAMESPACE]);
++    assert!(matches!(
++        flat.visible_spec("spawn_agent"),
++        ToolSpec::Function(ResponsesApiTool { name, .. }) if name == "spawn_agent"
++    ));
++    assert!(matches!(
++        flat.visible_spec("intatis_business_tool"),
++        ToolSpec::Function(ResponsesApiTool { name, .. }) if name == "intatis_business_tool"
++    ));
++    assert!(
++        flat.registered_names
++            .contains(&ToolName::plain("spawn_agent").to_string())
++    );
++    assert!(
++        !flat
++            .registered_names
++            .contains(&ToolName::namespaced(MULTI_AGENT_V2_NAMESPACE, "spawn_agent").to_string())
++    );
++}
++
+ #[tokio::test]
+ async fn multi_agent_v2_namespace_is_supported_by_bedrock_provider() {
+     let plan = probe(|turn| {
+diff --git a/codex-rs/features/src/feature_configs.rs b/codex-rs/features/src/feature_configs.rs
+index 88062d5..2fc715a 100644
+--- a/codex-rs/features/src/feature_configs.rs
++++ b/codex-rs/features/src/feature_configs.rs
+@@ -3,6 +3,7 @@ use schemars::JsonSchema;
+ use serde::Deserialize;
+ use serde::Serialize;
+ use std::collections::BTreeMap;
++use std::path::PathBuf;
+ 
+ #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+ #[serde(deny_unknown_fields)]
+@@ -29,6 +30,28 @@ impl FeatureConfig for CodeModeConfigToml {
+     }
+ }
+ 
++#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
++#[serde(deny_unknown_fields)]
++pub struct IntatisAgentWorkspaceConfigToml {
++    /// Absolute working directory selected for the spawned agent.
++    pub cwd: PathBuf,
++    /// Exact runtime workspace roots selected for the spawned agent.
++    pub workspace_roots: Vec<PathBuf>,
++    /// Safe model-visible description. Filesystem paths are never added to the tool schema.
++    #[schemars(length(min = 1, max = 512))]
++    pub description: String,
++    /// Exact filesystem sandbox selected by the trusted Intatis host preset.
++    pub sandbox: IntatisAgentWorkspaceSandboxToml,
++}
++
++#[derive(Serialize, Deserialize, Debug, Clone, Copy, Default, PartialEq, Eq, JsonSchema)]
++#[serde(rename_all = "kebab-case")]
++pub enum IntatisAgentWorkspaceSandboxToml {
++    #[default]
++    ReadOnly,
++    WorkspaceWrite,
++}
++
+ #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq, JsonSchema)]
+ #[serde(deny_unknown_fields)]
+ pub struct MultiAgentV2ConfigToml {
+@@ -60,6 +83,10 @@ pub struct MultiAgentV2ConfigToml {
+     #[serde(skip_serializing_if = "Option::is_none")]
+     #[schemars(length(min = 1, max = 64), regex(pattern = r"^[a-zA-Z0-9_-]+$"))]
+     pub tool_namespace: Option<String>,
++    /// Keep MultiAgentV2 tools as ordinary top-level functions even when the provider supports
++    /// Responses namespaces. This is an explicit host choice; providers are never guessed.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub flat_tools: Option<bool>,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub hide_spawn_agent_metadata: Option<bool>,
+     /// Exposes `model` and `reasoning_effort` on the multi-agent v2 spawn tool and adds
+@@ -68,6 +95,9 @@ pub struct MultiAgentV2ConfigToml {
+     pub expose_spawn_agent_model_overrides: Option<bool>,
+     #[serde(skip_serializing_if = "Option::is_none")]
+     pub non_code_mode_only: Option<bool>,
++    /// Intatis-owned workspace presets exposed to MultiAgentV2 as opaque IDs.
++    #[serde(skip_serializing_if = "Option::is_none")]
++    pub intatis_agent_workspaces: Option<BTreeMap<String, IntatisAgentWorkspaceConfigToml>>,
+ }
+ 
+ impl FeatureConfig for MultiAgentV2ConfigToml {
+diff --git a/codex-rs/features/src/lib.rs b/codex-rs/features/src/lib.rs
+index e7a8049..799777b 100644
+--- a/codex-rs/features/src/lib.rs
++++ b/codex-rs/features/src/lib.rs
+@@ -20,6 +20,8 @@ pub use feature_configs::CodeModeConfigToml;
+ pub use feature_configs::CurrentTimeReminderConfigToml;
+ pub use feature_configs::CurrentTimeReminderDeliveryMode;
+ pub use feature_configs::CurrentTimeSource;
++pub use feature_configs::IntatisAgentWorkspaceConfigToml;
++pub use feature_configs::IntatisAgentWorkspaceSandboxToml;
+ pub use feature_configs::MultiAgentV2ConfigToml;
+ pub use feature_configs::NetworkProxyConfigToml;
+ pub use feature_configs::NetworkProxyDomainPermissionToml;
+diff --git a/codex-rs/features/src/tests.rs b/codex-rs/features/src/tests.rs
+index 898e5db..0994c90 100644
+--- a/codex-rs/features/src/tests.rs
++++ b/codex-rs/features/src/tests.rs
+@@ -418,9 +418,11 @@ non_code_mode_only = true
+             subagent_usage_hint_text: Some("Subagent guidance.".to_string()),
+             multi_agent_mode_hint_text: Some("Custom mode guidance.".to_string()),
+             tool_namespace: Some("agents".to_string()),
++            flat_tools: None,
+             hide_spawn_agent_metadata: Some(true),
+             expose_spawn_agent_model_overrides: Some(true),
+             non_code_mode_only: Some(true),
++            intatis_agent_workspaces: None,
+         }))
+     );
+ }
+diff --git a/codex-rs/state/src/runtime/memories.rs b/codex-rs/state/src/runtime/memories.rs
+index 3310358..5425811 100644
+--- a/codex-rs/state/src/runtime/memories.rs
++++ b/codex-rs/state/src/runtime/memories.rs
+@@ -214,6 +214,7 @@ FROM threads
+                 search_term: None,
+             },
+             /*include_thread_id_tiebreaker*/ false,
++            /*require_preview*/ true,
+         );
+         builder.push(" AND threads.memory_mode = 'enabled'");
+         builder
+diff --git a/codex-rs/state/src/runtime/threads.rs b/codex-rs/state/src/runtime/threads.rs
+index 2cc7b10..9f51b61 100644
+--- a/codex-rs/state/src/runtime/threads.rs
++++ b/codex-rs/state/src/runtime/threads.rs
+@@ -378,6 +378,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
+                 search_term: None,
+             },
+             /*include_thread_id_tiebreaker*/ false,
++            /*require_preview*/ true,
+         );
+         builder.push(" AND threads.title = ");
+         builder.push_bind(title);
+@@ -502,6 +503,7 @@ ON CONFLICT(child_thread_id) DO NOTHING
+                 search_term: None,
+             },
+             sort_key == crate::SortKey::RecencyAt,
++            /*require_preview*/ true,
+         );
+         push_thread_order_and_limit(
+             &mut builder,
+@@ -1130,7 +1132,12 @@ WITH RECURSIVE subtree(child_thread_id, parent_thread_id) AS (
+     };
+     let include_thread_id_tiebreaker =
+         relation_filter.is_some() || filters.sort_key == SortKey::RecencyAt;
+-    push_thread_filters(builder, filters, include_thread_id_tiebreaker);
++    push_thread_filters(
++        builder,
++        filters,
++        include_thread_id_tiebreaker,
++        /*require_preview*/ relation_filter.is_none(),
++    );
+     match relation_filter {
+         Some(crate::ThreadRelationFilter::DirectChildrenOf(parent_thread_id)) => {
+             builder.push(" AND listed_edge.parent_thread_id = ");
+@@ -1232,6 +1239,7 @@ pub(super) fn push_thread_filters<'a>(
+     builder: &mut QueryBuilder<Sqlite>,
+     options: ThreadFilterOptions<'a>,
+     include_thread_id_tiebreaker: bool,
++    require_preview: bool,
+ ) {
+     let ThreadFilterOptions {
+         archived_only,
+@@ -1249,7 +1257,9 @@ pub(super) fn push_thread_filters<'a>(
+     } else {
+         builder.push(" AND threads.archived = 0");
+     }
+-    builder.push(" AND threads.preview <> ''");
++    if require_preview {
++        builder.push(" AND threads.preview <> ''");
++    }
+     if !allowed_sources.is_empty() {
+         builder.push(" AND threads.source IN (");
+         let mut separated = builder.separated(", ");
+@@ -1884,6 +1894,13 @@ mod tests {
+             (grandchild_id, 1_700_000_300),
+         ] {
+             let mut metadata = test_thread_metadata(&codex_home, thread_id, codex_home.clone());
++            if thread_id == first_child_id {
++                // Spawned agents can have only inter-agent input and therefore
++                // no user-derived title/preview. Relationship listings must
++                // still recover them from the persisted spawn graph.
++                metadata.title.clear();
++                metadata.preview = None;
++            }
+             metadata.created_at =
+                 DateTime::<Utc>::from_timestamp(created_at, 0).expect("valid timestamp");
+             metadata.updated_at = metadata.created_at;

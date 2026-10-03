@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Developer-ID (notarized) build: NOT app-sandboxed. Production Code/Cowork
+         still does not model-expose raw run_shell; explicitly integrated Git,
+         browser, and document backends remain permission-gated. Set
+         AppConfig.platformProfile to .macDeveloperID for this build. Sign with Hardened Runtime.
+         See ARCHITECTURE.md §9.1. -->
+
+    <!-- Hardened Runtime is enabled as a signing option; these relax it only as
+         needed. Keep this list as small as possible. -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <false/>
+    <key>com.apple.security.cs.disable-library-validation</key>
+    <false/>
+
+    <!-- Composer voice input is user initiated and still gated by macOS TCC.
+         Hardened Runtime requires this explicit resource entitlement. -->
+    <key>com.apple.security.device.audio-input</key>
+    <true/>
+</dict>
+</plist>

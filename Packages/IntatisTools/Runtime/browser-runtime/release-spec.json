@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "layout_version": 1,
+  "runtime_release": "2026.08.27.1",
+  "architectures": [
+    "arm64",
+    "x86_64"
+  ],
+  "components": {
+    "node": "24.20.0",
+    "playwright": "1.56.1",
+    "playwright_core": "1.56.1",
+    "chromium": "141.0.7390.37",
+    "chromium_revision": "1194"
+  },
+  "source_artifacts": {
+    "node_arm64": {
+      "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-arm64.tar.gz",
+      "sha256": "40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8"
+    },
+    "node_x86_64": {
+      "url": "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-x64.tar.gz",
+      "sha256": "9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4"
+    },
+    "playwright": {
+      "url": "https://registry.npmjs.org/playwright/-/playwright-1.56.1.tgz",
+      "sha256": "44a9a01530963e82abd651b8b546897d0e594ca1801d72e5bbddfd7d35509c62"
+    },
+    "playwright_core": {
+      "url": "https://registry.npmjs.org/playwright-core/-/playwright-core-1.56.1.tgz",
+      "sha256": "fa648e5442796d4160c68dcfc3914ed5224f147852264993e6376e29f0228238"
+    },
+    "chromium_arm64": {
+      "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1194/chromium-mac-arm64.zip",
+      "sha256": "bb13e2bab465de3305277559395805c19ef8f221420e9a7d830a149c8e4d9e3d"
+    },
+    "chromium_x86_64": {
+      "url": "https://cdn.playwright.dev/dbazure/download/playwright/builds/chromium/1194/chromium-mac.zip",
+      "sha256": "f58d0f3f3d6b4bb60da79f992ad36ba5fa4ae768cd7d4d2ace06d48a9acdf4e9"
+    },
+    "chromium_license": {
+      "url": "https://chromium.googlesource.com/chromium/src/+/9f043f63b0e5b728c8d09f3e3ddfc1681a4bd58e/LICENSE?format=TEXT",
+      "sha256": "363eddfec00830d4826f38173bd40a17eeada40a947a8d93b935371a1ae5a6d1",
+      "decoded_sha256": "368cca1106be99d39ecd32a38d8305585d802a475effb66380b91ffc9bcf709b"
+    }
+  },
+  "upstream": {
+    "playwright_chromium_revision": "1194",
+    "chromium_commit": "9f043f63b0e5b728c8d09f3e3ddfc1681a4bd58e"
+  }
+}
